@@ -1,0 +1,592 @@
+"""Offline tests for the W5 integration layer (``__init__.py``).
+
+No host is started and no socket is ever opened: the plugin class is loaded via
+``conftest.load`` (the venv can import ``plugin.sdk`` because N.E.K.O is on the
+editable path), and every instance is built with ``object.__new__`` plus the few
+attributes the tested code touches. Provider I/O is monkeypatched.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import copy
+import json
+
+import conftest
+import pytest
+
+entries = conftest.load("__init__")
+net = conftest.load("_net")
+providers = conftest.load("_providers")
+resilience = conftest.load("_resilience")
+
+FreeWebSearchPlugin = entries.FreeWebSearchPlugin
+ApiKeyRejectedError = resilience.ApiKeyRejectedError
+QuotaExhaustedError = resilience.QuotaExhaustedError
+
+# A realistic-shaped "secret": anything the plugin echoes must never contain it.
+SECRET = "sk-exa-live-0123456789abcdef9b2c"
+TAIL = SECRET[-4:]
+
+
+class FakeLogger:
+    def __init__(self) -> None:
+        self.lines: list[str] = []
+
+    def _record(self, message, *args) -> None:
+        try:
+            self.lines.append(str(message).format(*args))
+        except Exception:
+            self.lines.append(str(message))
+
+    def info(self, message, *args, **_kw) -> None:
+        self._record(message, *args)
+
+    debug = warning = error = exception = log = info
+
+    def blob(self) -> str:
+        return "\n".join(self.lines)
+
+
+class FakeConfig:
+    """In-memory stand-in for ``self.config`` (host deep-merge + atomic write)."""
+
+    def __init__(self, data: dict) -> None:
+        self.data = data
+
+    async def dump(self, *, timeout: float = 5.0) -> dict:
+        return copy.deepcopy(self.data)
+
+    async def update(self, patch, *, timeout: float = 5.0) -> dict:
+        for section, values in dict(patch).items():
+            if isinstance(values, dict):
+                table = self.data.setdefault(section, {})
+                table.update(values)
+        return copy.deepcopy(self.data)
+
+
+class FakeCtx:
+    def __init__(self) -> None:
+        self.statuses: list[dict] = []
+
+    def update_status(self, status: dict) -> None:
+        self.statuses.append(status)
+
+
+def make_plugin(search: dict | None = None, *, net_: dict | None = None,
+                ui_: dict | None = None, host_: dict | None = None,
+                data: dict | None = None) -> FreeWebSearchPlugin:
+    """A plugin instance with config sections set, no host, no real __init__."""
+    if data is None:
+        data = {
+            "search": dict(search or {}),
+            "net": dict(net_ or {}),
+            "ui": dict(ui_ or {}),
+            "host": dict(host_ or {}),
+        }
+    plugin = object.__new__(FreeWebSearchPlugin)
+    plugin.ctx = FakeCtx()
+    plugin.logger = FakeLogger()
+    plugin._cfg = {}
+    plugin._sections = {name: {} for name in entries.CONFIG_SECTIONS}
+    plugin._coordinators = {}
+    plugin._key_state = "unknown"
+    plugin._quota_state = ""
+    plugin._exa_last_error = ""
+    plugin.config = FakeConfig(data)
+    sections = plugin._sections
+    sections["search"] = dict(data.get("search") or {})
+    sections["net"] = dict(data.get("net") or {})
+    sections["ui"] = dict(data.get("ui") or {})
+    sections["host"] = dict(data.get("host") or {})
+    plugin._cfg = sections["search"]
+    return plugin
+
+
+def exa_results() -> list[dict]:
+    return [{"title": "T", "url": "https://example.com/a", "snippet": "s"}]
+
+
+# ---------------------------------------------------------------------------
+# C. effective chain (proxy-aware trimming)
+# ---------------------------------------------------------------------------
+
+def test_default_chain_matches_plan() -> None:
+    plugin = make_plugin()
+    assert plugin._chain() == ["exa", "anysearch", "bing", "baidu"]
+    assert list(entries.DEFAULT_CHAIN) == ["exa", "anysearch", "bing", "baidu"]
+
+
+def test_duckduckgo_trimmed_without_any_proxy(monkeypatch) -> None:
+    monkeypatch.setattr(net, "system_proxy_present", lambda: False)
+    plugin = make_plugin({"backend_chain": ["exa", "duckduckgo", "anysearch", "bing"]})
+    assert plugin._chain() == ["exa", "duckduckgo", "anysearch", "bing"]
+    assert plugin._effective_chain() == ["exa", "anysearch", "bing"]
+
+
+def test_duckduckgo_joins_with_system_proxy(monkeypatch) -> None:
+    monkeypatch.setattr(net, "system_proxy_present", lambda: True)
+    plugin = make_plugin({"backend_chain": ["exa", "duckduckgo", "anysearch", "bing"]})
+    assert plugin._effective_chain() == ["exa", "duckduckgo", "anysearch", "bing"]
+
+
+def test_duckduckgo_joins_with_explicit_proxy_url(monkeypatch) -> None:
+    monkeypatch.setattr(net, "system_proxy_present", lambda: False)
+    plugin = make_plugin({"backend_chain": ["exa", "duckduckgo"],
+                          "proxy_url": "http://127.0.0.1:7897"})
+    assert plugin._effective_chain() == ["exa", "duckduckgo"]
+
+
+def test_proxy_mode_holding_a_url_counts_as_proxy(monkeypatch) -> None:
+    # plan §4.2: "手动设 proxy=<url> 后出现"
+    monkeypatch.setattr(net, "system_proxy_present", lambda: False)
+    plugin = make_plugin({"backend_chain": ["exa", "duckduckgo"],
+                          "proxy": "http://127.0.0.1:7897"})
+    assert plugin._effective_chain() == ["exa", "duckduckgo"]
+
+
+def test_duckduckgo_needs_proxy_off_keeps_it(monkeypatch) -> None:
+    monkeypatch.setattr(net, "system_proxy_present", lambda: False)
+    plugin = make_plugin({"backend_chain": ["exa", "duckduckgo"],
+                          "duckduckgo_needs_proxy": False})
+    assert plugin._effective_chain() == ["exa", "duckduckgo"]
+
+
+def test_searxng_still_requires_base_url() -> None:
+    plugin = make_plugin({"backend_chain": ["exa", "searxng"]})
+    assert plugin._effective_chain() == ["exa"]
+    plugin = make_plugin({"backend_chain": ["exa", "searxng"],
+                          "searxng_base_url": "http://127.0.0.1:8888"})
+    assert plugin._effective_chain() == ["exa", "searxng"]
+
+
+def test_forced_duckduckgo_without_proxy_explains_itself(monkeypatch) -> None:
+    monkeypatch.setattr(net, "system_proxy_present", lambda: False)
+    plugin = make_plugin({"backend_chain": ["exa", "duckduckgo"]})
+    with pytest.raises(resilience.SearchProviderError) as info:
+        asyncio.run(plugin._search_with_fallback("某个关键词", 3, "duckduckgo"))
+    assert "代理" in str(info.value)
+
+
+# ---------------------------------------------------------------------------
+# D. masking + key fallback (retry exactly once)
+# ---------------------------------------------------------------------------
+
+def test_mask_key_shapes() -> None:
+    assert FreeWebSearchPlugin._mask_key(SECRET) == f"exa****{TAIL}"
+    assert FreeWebSearchPlugin._mask_key("") == ""
+    assert FreeWebSearchPlugin._mask_key("   ") == ""
+    # A key this short must not be echoed even partially.
+    assert FreeWebSearchPlugin._mask_key("abcd") == "exa****"
+
+
+def _install_key_error(monkeypatch, error, anonymous_ok=True):
+    calls: list[str] = []
+
+    def fake_search_exa(query, limit, *, timeout, policy, proxy_url, live_crawl=False,
+                        api_key="", tool="auto"):
+        calls.append(api_key)
+        if api_key:
+            raise error
+        if anonymous_ok:
+            return exa_results()
+        raise resilience.BlockedError("anonymous tier challenged")
+
+    monkeypatch.setattr(providers, "search_exa", fake_search_exa)
+    return calls
+
+
+def test_invalid_key_retries_anonymous_exactly_once(monkeypatch) -> None:
+    calls = _install_key_error(monkeypatch, ApiKeyRejectedError("web_search_exa error (401): Invalid API key"))
+    plugin = make_plugin({"exa_api_key": SECRET})
+    results = plugin._fetcher("exa", "q", 3, 5.0)()
+    assert results == exa_results()
+    assert calls == [SECRET, ""]            # once keyed, once anonymous -- no more
+    assert plugin._key_state == "invalid"
+    assert SECRET not in plugin._exa_last_error
+    assert SECRET not in plugin.logger.blob()
+
+
+def test_quota_error_marks_quota_and_degrades(monkeypatch) -> None:
+    calls = _install_key_error(monkeypatch, QuotaExhaustedError("402 Payment Required", 30.0))
+    plugin = make_plugin({"exa_api_key": SECRET})
+    assert plugin._fetcher("exa", "q", 3, 5.0)() == exa_results()
+    assert calls == [SECRET, ""]
+    assert plugin._quota_state == "exhausted"
+
+
+def test_anonymous_retry_happens_only_once(monkeypatch) -> None:
+    # Anonymous tier failing must NOT trigger a second retry -- it propagates
+    # so the chain fallback moves to the next backend.
+    calls = _install_key_error(monkeypatch, ApiKeyRejectedError("401"), anonymous_ok=False)
+    plugin = make_plugin({"exa_api_key": SECRET})
+    with pytest.raises(resilience.BlockedError):
+        plugin._fetcher("exa", "q", 3, 5.0)()
+    assert len(calls) == 2
+
+
+def test_fallback_disabled_raises_sanitised_key_error(monkeypatch) -> None:
+    calls = _install_key_error(monkeypatch, ApiKeyRejectedError("401"))
+    plugin = make_plugin({"exa_api_key": SECRET, "exa_key_fallback_anonymous": False})
+    with pytest.raises(ApiKeyRejectedError) as info:
+        plugin._fetcher("exa", "q", 3, 5.0)()
+    assert calls == [SECRET]                              # no retry at all
+    assert SECRET not in str(info.value)                  # upstream/ key text stripped
+    assert "密钥无效" in str(info.value)
+    assert _error_code_for(info.value) == "FREE_WEB_SEARCH_KEY_INVALID"
+
+
+def test_quota_fallback_disabled_raises_quota_code(monkeypatch) -> None:
+    _install_key_error(monkeypatch, QuotaExhaustedError("402", 60.0))
+    plugin = make_plugin({"exa_api_key": SECRET, "exa_key_fallback_anonymous": False})
+    with pytest.raises(QuotaExhaustedError) as info:
+        plugin._fetcher("exa", "q", 3, 5.0)()
+    assert _error_code_for(info.value) == "FREE_WEB_SEARCH_QUOTA"
+    assert getattr(info.value, "retry_after_seconds", None) == 60.0
+
+
+def test_valid_key_marks_state_and_no_retry(monkeypatch) -> None:
+    calls = _install_key_error(monkeypatch, None or RuntimeError("never"))
+
+    def good(query, limit, *, timeout, policy, proxy_url, live_crawl=False,
+             api_key="", tool="auto"):
+        calls.append(api_key)
+        assert api_key == SECRET and tool == "auto"
+        return exa_results()
+
+    monkeypatch.setattr(providers, "search_exa", good)
+    plugin = make_plugin({"exa_api_key": SECRET})
+    assert plugin._fetcher("exa", "q", 3, 5.0)() == exa_results()
+    assert calls == [SECRET]
+    assert plugin._key_state == "valid"
+
+
+def _error_code_for(error: BaseException) -> str:
+    return entries._error_code(error)
+
+
+# ---------------------------------------------------------------------------
+# E. panel context structure + no plaintext key anywhere
+# ---------------------------------------------------------------------------
+
+CONTEXT_KEYS = {
+    "onboarding_stage", "exa_key_masked", "exa_key_source", "exa_key_state",
+    "exa_last_error", "chain", "effective_chain", "proxy_mode", "proxy_detected",
+    "host_search", "ssrf_fake_ip", "quota_note",
+}
+
+
+def test_panel_context_shape_and_mask(monkeypatch) -> None:
+    monkeypatch.setattr(net, "system_proxy_present", lambda: False)
+    plugin = make_plugin(
+        {"exa_api_key": SECRET, "backend_chain": ["exa", "duckduckgo", "anysearch", "bing"]},
+        ui_={"onboarding_stage": "trial"},
+    )
+    context = plugin._build_panel_context({"exists": True, "running": True, "toggleable": True})
+    assert set(context) == CONTEXT_KEYS
+    assert context["onboarding_stage"] == "trial"
+    assert context["exa_key_masked"] == f"exa****{TAIL}"
+    assert context["exa_key_source"] == "config"
+    assert context["exa_key_state"] == "unknown"
+    assert context["chain"] == ["exa", "duckduckgo", "anysearch", "bing"]
+    assert context["effective_chain"] == ["exa", "anysearch", "bing"]
+    assert context["proxy_mode"] == "auto"
+    assert context["proxy_detected"] is False
+    assert context["host_search"] == {"exists": True, "running": True, "toggleable": True}
+    assert context["ssrf_fake_ip"] is True
+    assert "$10" in context["quota_note"]
+    assert SECRET not in json.dumps(context, ensure_ascii=False)
+
+
+def test_panel_context_defaults_without_key(monkeypatch) -> None:
+    monkeypatch.setattr(net, "system_proxy_present", lambda: False)
+    plugin = make_plugin()
+    context = plugin._build_panel_context({"exists": False, "running": False, "toggleable": True})
+    assert context["exa_key_masked"] == ""
+    assert context["exa_key_source"] == "none"
+    assert context["chain"] == ["exa", "anysearch", "bing", "baidu"]
+
+
+def test_panel_context_entry_returns_plain_dict_and_survives_host_failure(monkeypatch) -> None:
+    # _host.HostPluginControl raising must not sink the context: it degrades to
+    # an "unknown" host_search block (contract's three keys still present).
+    class Boom:
+        def __init__(self, *args, **kwargs):
+            raise OSError("host api down")
+
+    monkeypatch.setattr(entries._host, "HostPluginControl", Boom)
+    plugin = make_plugin({"exa_api_key": SECRET})
+    context = asyncio.run(plugin.panel_context())
+    assert isinstance(context, dict)                      # context, not Ok()
+    assert context["host_search"] == {"exists": False, "running": False, "toggleable": True}
+    assert SECRET not in json.dumps(context, ensure_ascii=False)
+
+
+def test_no_plaintext_key_in_any_return_or_log(monkeypatch) -> None:
+    # Full search entry run: keyed exa dies on a 401-style error, anonymous
+    # tier answers. Neither the Ok payload nor any logged line may contain the
+    # key (the host logs plugin status/results verbatim).
+    calls = _install_key_error(monkeypatch, ApiKeyRejectedError("web_search_exa error (401): Invalid API key"))
+    plugin = make_plugin({"exa_api_key": SECRET, "backend_chain": ["exa"]})
+    outcome = asyncio.run(plugin.search(query="猫娘计划 官网", max_results=3))
+    assert outcome.is_ok() and calls == [SECRET, ""]
+    blob = json.dumps(outcome.value, ensure_ascii=False, default=str) + plugin.logger.blob()
+    assert SECRET not in blob
+    assert SECRET[:-4] not in blob                        # even a long prefix
+    report = plugin.ctx.statuses
+    assert all(SECRET not in json.dumps(item, default=str) for item in report)
+
+
+# ---------------------------------------------------------------------------
+# D/E. save/clear/test key round-trip (persist + self reload)
+# ---------------------------------------------------------------------------
+
+def test_save_exa_key_persists_reloads_and_reports_masked(monkeypatch) -> None:
+    def good(query, limit, *, timeout, policy, proxy_url, live_crawl=False,
+             api_key="", tool="auto"):
+        assert api_key == "sk-new-key-abcd"
+        assert tool in {"auto", "simple", "advanced"}
+        return exa_results()
+
+    monkeypatch.setattr(providers, "search_exa", good)
+    data = {"search": {}, "net": {}, "ui": {}, "host": {}}
+    plugin = make_plugin(data=data)
+    result = asyncio.run(plugin.save_exa_key(key="sk-new-key-abcd"))
+    assert result.is_ok()
+    payload = result.value
+    assert payload["ok"] is True
+    assert payload["masked"] == "exa****abcd"
+    assert payload["count"] == 1
+    assert isinstance(payload["latency_ms"], int)
+    assert data["search"]["exa_api_key"] == "sk-new-key-abcd"   # written to disk
+    assert plugin._cfg["exa_api_key"] == "sk-new-key-abcd"      # and reloaded in-process
+    assert plugin._key_state == "valid"
+    assert "sk-new-key-abcd" not in json.dumps(payload)
+
+
+def test_save_exa_key_bad_key_saves_but_marks_invalid(monkeypatch) -> None:
+    def reject(query, limit, *, timeout, policy, proxy_url, live_crawl=False,
+               api_key="", tool="auto"):
+        raise ApiKeyRejectedError("401 Invalid API key")
+
+    monkeypatch.setattr(providers, "search_exa", reject)
+    data = {"search": {}, "net": {}, "ui": {}, "host": {}}
+    plugin = make_plugin(data=data)
+    result = asyncio.run(plugin.save_exa_key(key=SECRET))
+    payload = result.value
+    assert payload["ok"] is False
+    assert payload["key_state"] == "invalid"
+    assert data["search"]["exa_api_key"] == SECRET              # saved anyway (contract)
+    assert SECRET not in json.dumps(payload)
+    assert payload["masked"] == f"exa****{TAIL}"
+
+
+def test_clear_and_test_exa_key_without_key(monkeypatch) -> None:
+    monkeypatch.setattr(providers, "search_exa",
+                        lambda *a, **k: pytest.fail("must not search without a key"))
+    data = {"search": {"exa_api_key": SECRET}, "net": {}, "ui": {}, "host": {}}
+    plugin = make_plugin(data=data)
+    cleared = asyncio.run(plugin.clear_exa_key())
+    assert cleared.is_ok() and data["search"]["exa_api_key"] == ""
+    assert plugin._cfg["exa_api_key"] == "" and plugin._key_state == "unknown"
+    tested = asyncio.run(plugin.test_exa_key())
+    assert tested.is_ok() and tested.value["ok"] is False and tested.value["count"] == 0
+
+
+def test_save_exa_key_rejects_empty(monkeypatch) -> None:
+    plugin = make_plugin()
+    assert asyncio.run(plugin.save_exa_key(key="  ")).is_err()
+
+
+# ---------------------------------------------------------------------------
+# F. host toggle entries (must go through to_thread, degrade on failure)
+# ---------------------------------------------------------------------------
+
+class FakeControl:
+    calls: list[tuple] = []
+    outcome = (True, entries._host.MESSAGE_STOPPED)
+
+    def __init__(self, base_url: str = "", timeout: float = 4.0):
+        self.timeout = timeout
+
+    def status(self, plugin_id: str):
+        FakeControl.calls.append(("status", plugin_id))
+        return entries._host.HostPluginState(plugin_id, True, True, {})
+
+    def set_enabled(self, plugin_id, enabled):
+        FakeControl.calls.append(("set", plugin_id, enabled))
+        return FakeControl.outcome
+
+
+def test_get_and_set_host_search_entries(monkeypatch) -> None:
+    FakeControl.calls = []
+    monkeypatch.setattr(entries._host, "HostPluginControl", FakeControl)
+    plugin = make_plugin()
+    got = asyncio.run(plugin.get_host_search())
+    assert got.is_ok() and got.value["running"] is True and got.value["exists"] is True
+    assert FakeControl.calls[-1] == ("status", entries._host.BUILTIN_SEARCH_PLUGIN_ID)
+
+    off = asyncio.run(plugin.set_host_search(enabled=False))
+    assert off.is_ok() and off.value["ok"] is True and off.value["running"] is False
+    assert FakeControl.calls[-1] == ("set", entries._host.BUILTIN_SEARCH_PLUGIN_ID, False)
+    # The user intent is remembered for startup ([host].takeover_search).
+    assert plugin._sections["host"]["takeover_search"] is True
+
+
+def test_set_host_search_failure_degrades_without_raising(monkeypatch) -> None:
+    class Dead(FakeControl):
+        def __init__(self, base_url="", timeout=4.0):
+            raise OSError("connection refused")
+
+    monkeypatch.setattr(entries._host, "HostPluginControl", Dead)
+    plugin = make_plugin()
+    result = asyncio.run(plugin.set_host_search(enabled=True))
+    assert result.is_ok() and result.value["ok"] is False
+    assert "宿主" in result.value["message"]
+
+
+# ---------------------------------------------------------------------------
+# G. onboarding state flow
+# ---------------------------------------------------------------------------
+
+def test_set_onboarding_and_show_guide_flow() -> None:
+    data = {"search": {}, "net": {}, "ui": {}, "host": {}}
+    plugin = make_plugin(data=data)
+    done = asyncio.run(plugin.set_onboarding(stage="done"))
+    assert done.is_ok() and done.value["stage"] == "done"
+    assert data["ui"]["onboarding_stage"] == "done"
+    assert plugin._text_in("ui", "onboarding_stage") == "done"   # reloaded, no stale view
+    guide = asyncio.run(plugin.show_guide())
+    assert guide.is_ok() and guide.value["stage"] == "welcome"
+    assert data["ui"]["onboarding_stage"] == "welcome"
+    assert asyncio.run(plugin.set_onboarding(stage="nonsense")).is_err()
+
+
+def test_first_run_notice_pushes_once_and_marks_sent() -> None:
+    data = {"search": {}, "net": {}, "ui": {}, "host": {}}
+    plugin = make_plugin(data=data)
+    pushes: list[dict] = []
+    plugin.push_message = lambda **kw: pushes.append(kw) or {"submitted": True}
+
+    first = asyncio.run(plugin.startup())
+    assert first.is_ok()
+    assert len(pushes) == 1
+    push = pushes[0]
+    assert push["ai_behavior"] == "respond" and push["visibility"] == []
+    assert push["parts"][0]["type"] == "text"
+    assert data["ui"]["first_run_notice_sent"] is True
+
+    second = asyncio.run(plugin.startup())            # config_change also re-runs startup
+    assert second.is_ok() and len(pushes) == 1        # never nags twice
+    # Ok payload exposes chain vs effective_chain and never the raw key material.
+    assert set(second.value) >= {"chain", "effective_chain"}
+
+
+def test_first_run_notice_skipped_when_stage_or_host_says_no() -> None:
+    data = {"search": {}, "net": {}, "ui": {"onboarding_stage": "trial"}, "host": {}}
+    plugin = make_plugin(data=data)
+    plugin.push_message = lambda **kw: pytest.fail("must not push once a stage exists")
+    assert asyncio.run(plugin.startup()).is_ok()
+
+    def boom(**_kw):
+        raise RuntimeError("bus down")
+
+    plugin2 = make_plugin(data={"search": {}, "net": {}, "ui": {}, "host": {}})
+    plugin2.push_message = boom
+    result = asyncio.run(plugin2.startup())
+    assert result.is_ok()                             # push failure must not sink startup
+    assert plugin2._sections["ui"].get("first_run_notice_sent") is not True  # retry next boot
+
+
+def test_startup_reasserts_takeover_and_never_fails(monkeypatch) -> None:
+    seen: list[tuple] = []
+
+    class Toggle(FakeControl):
+        def set_enabled(self, plugin_id, enabled):
+            seen.append((plugin_id, enabled))
+            raise RuntimeError("host not listening")    # must be swallowed
+
+    monkeypatch.setattr(entries._host, "HostPluginControl", Toggle)
+    plugin = make_plugin(host_={"takeover_search": True})
+    result = asyncio.run(plugin.startup())
+    assert result.is_ok()
+    assert seen == [(entries._host.BUILTIN_SEARCH_PLUGIN_ID, False)]
+
+
+def test_startup_without_takeover_does_not_touch_host(monkeypatch) -> None:
+    def explode(*args, **kwargs):
+        raise AssertionError("HostPluginControl must not be built when takeover_search is false")
+
+    monkeypatch.setattr(entries._host, "HostPluginControl", explode)
+    assert asyncio.run(make_plugin().startup()).is_ok()
+
+
+# ---------------------------------------------------------------------------
+# A. multi-section config tolerance
+# ---------------------------------------------------------------------------
+
+def test_missing_sections_fall_back_to_defaults() -> None:
+    plugin = object.__new__(FreeWebSearchPlugin)
+    plugin.logger = FakeLogger()
+    plugin._cfg = {}
+    plugin._sections = {name: {} for name in entries.CONFIG_SECTIONS}
+    plugin._coordinators = {}
+    # Host may hand us anything; the getters must not raise on absent keys.
+    assert plugin._flag_in("net", "nope", True) is True
+    assert plugin._text_in("ui", "onboarding_stage") == ""
+    assert plugin._list_in("net", "ssrf_allow_ranges", entries.DEFAULT_SSRF_ALLOW_RANGES) == ["198.18.0.0/15"]
+    assert plugin._ssrf_ranges() == ["198.18.0.0/15"]
+    plugin._sections["net"] = {"ssrf_allow_ranges": []}
+    assert plugin._ssrf_ranges() == []              # explicit empty = opt out
+
+
+def test_tolerant_bool_and_text_parsers() -> None:
+    plugin = make_plugin(search={})
+    plugin._sections["ui"] = {"a": "true", "b": 0, "c": "off"}
+    assert plugin._flag_in("ui", "a", False) is True
+    assert plugin._flag_in("ui", "b", True) is False
+    assert plugin._flag_in("ui", "c", True) is False
+    assert plugin._flag_in("ui", "missing", True) is True
+    assert plugin._text_in("ui", "b", "x") == "x"   # non-str -> default
+
+
+def test_set_ssrf_guard_switch_round_trips() -> None:
+    """The panel's one-click switch must actually change what fetch allows."""
+    data = {"search": {}, "net": {}, "ui": {}, "host": {}}
+    plugin = make_plugin(data=data)
+
+    off = asyncio.run(plugin.set_ssrf_guard(enabled=False))
+    assert off.is_ok() and off.value["enabled"] is False
+    assert data["net"]["ssrf_allow_ranges"] == []
+    assert plugin._ssrf_ranges() == []                       # reloaded, not stale
+    assert asyncio.run(plugin.panel_context())["ssrf_fake_ip"] is False
+
+    on = asyncio.run(plugin.set_ssrf_guard(enabled=True))
+    assert on.is_ok() and on.value["ranges"] == list(entries.DEFAULT_SSRF_ALLOW_RANGES)
+    assert asyncio.run(plugin.panel_context())["ssrf_fake_ip"] is True
+
+
+def test_fetch_passes_configured_allow_ranges_to_guard(monkeypatch) -> None:
+    """Wiring proof: an empty `[net].ssrf_allow_ranges` has to reach `_guard`.
+
+    A switch that writes config but is never handed to the SSRF check is the same
+    as no switch at all, and it fails silently for exactly the TUN-mode users it
+    was built for. Providers are stubbed: this test must not touch the network.
+    """
+    seen: list[object] = []
+
+    def fake_normalize(url: str, *, allow_ranges=()):
+        seen.append(list(allow_ranges))
+        return url
+
+    def fake_fetch_direct(url: str, **_kwargs):
+        return {"title": "Example", "content": "hello body", "final_url": url, "mode": "direct"}
+
+    monkeypatch.setattr(entries._guard, "normalize_http_url", fake_normalize)
+    monkeypatch.setattr(entries._providers, "fetch_direct", fake_fetch_direct)
+
+    plugin = make_plugin(net_={"ssrf_allow_ranges": ["198.18.0.0/15"]})
+    result = asyncio.run(plugin.fetch("https://example.com/", mode="direct"))
+
+    assert result.is_ok(), result
+    assert seen == [["198.18.0.0/15"]], seen

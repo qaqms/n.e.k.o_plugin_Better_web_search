@@ -1,0 +1,648 @@
+// free_web_search 插件面板（hosted-tsx）
+//
+// 只依赖 @neko/plugin-ui 的导出；不产生任何网络请求（注册网址只是纯文本，供用户复制）。
+// 密钥只显示后端返回的掩码，输入框内容在保存后立刻清空，面板不留明文。
+import {
+  Alert,
+  Button,
+  Card,
+  CodeBlock,
+  DataTable,
+  Field,
+  Grid,
+  Inline,
+  Page,
+  PasswordInput,
+  RefreshButton,
+  Stack,
+  StatCard,
+  StatusBadge,
+  Step,
+  Steps,
+  Switch,
+  Text,
+  Tip,
+  useClipboard,
+  useConfirm,
+  useState,
+  useToast,
+} from "@neko/plugin-ui"
+import type { HostedAction, PluginSurfaceProps } from "@neko/plugin-ui"
+
+const EXA_KEY_PAGE = "https://dashboard.exa.ai/api-keys"
+
+type HostSearchState = {
+  exists?: boolean
+  running?: boolean
+  toggleable?: boolean
+}
+
+type PanelState = {
+  onboarding_stage?: string
+  exa_key_masked?: string
+  exa_key_source?: string
+  exa_key_state?: string
+  exa_last_error?: string
+  chain?: string[]
+  effective_chain?: string[]
+  proxy_mode?: string
+  proxy_detected?: boolean
+  host_search?: HostSearchState
+  ssrf_fake_ip?: boolean
+  quota_note?: string
+}
+
+type DiagnoseView = {
+  summary: string
+  rows: DiagnoseRowView[]
+  recommended: string[]
+}
+
+type DiagnoseRowView = {
+  name: string
+  direct: string
+  ms: string
+  note: string
+}
+
+type ActionRecord = Record<string, unknown>
+
+function unwrapActionResult(envelope: unknown): ActionRecord {
+  if (!envelope || typeof envelope !== "object") return {}
+  const record = envelope as ActionRecord
+  const inner = record.result
+  if (inner && typeof inner === "object") return inner as ActionRecord
+  return record
+}
+
+function asString(value: unknown, fallback: string): string {
+  if (typeof value === "string" && value.trim() !== "") return value.trim()
+  if (typeof value === "number" && Number.isFinite(value)) return String(value)
+  return fallback
+}
+
+function asList(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const items: string[] = []
+  for (const item of value) {
+    const text = asString(item, "")
+    if (text) items.push(text)
+  }
+  return items
+}
+
+function asBool(value: unknown, fallback: boolean): boolean {
+  if (typeof value === "boolean") return value
+  if (value === "true") return true
+  if (value === "false") return false
+  return fallback
+}
+
+function resultMessage(result: ActionRecord): string {
+  return asString(result.message, asString(result.summary, ""))
+}
+
+function resultOk(result: ActionRecord): boolean {
+  if (typeof result.ok === "boolean") return result.ok
+  if (typeof result.success === "boolean") return result.success
+  const status = asString(result.status, "").toLowerCase()
+  if (status === "error" || status === "failed" || status === "fail" || status === "rejected") return false
+  return true
+}
+
+// 未知/空值一律回到引导首屏，符合「打开面板第一屏就是新手引导」。
+function stageOf(value: unknown): string {
+  const raw = asString(value, "").toLowerCase()
+  if (raw === "trial") return "trial"
+  if (raw === "done") return "done"
+  return "welcome"
+}
+
+function maskOrDash(masked: string): string {
+  return masked || "-"
+}
+
+function latencyText(value: unknown): string {
+  const ms = Number(value)
+  if (!Number.isFinite(ms) || ms <= 0) return ""
+  if (ms < 1000) return `${Math.round(ms)} ms`
+  return `${(ms / 1000).toFixed(1)} s`
+}
+
+export default function FreeWebSearchPanel(props: PluginSurfaceProps<PanelState>) {
+  const { actions, state, t } = props
+  const toast = useToast()
+  const confirm = useConfirm()
+  const clipboard = useClipboard()
+
+  const safeState: PanelState = state && typeof state === "object" ? state : {}
+  const actionList: HostedAction[] = Array.isArray(actions) ? actions : []
+  const actionRegistryLoaded = actionList.length > 0
+
+  const [pending, setPending] = useState("")
+  const [localStage, setLocalStage] = useState("")
+  const [keyDraft, setKeyDraft] = useState("")
+  const [replaceOpen, setReplaceOpen] = useState(false)
+  const [keyError, setKeyError] = useState("")
+  const [notice, setNotice] = useState("")
+  const [noticeIsError, setNoticeIsError] = useState(false)
+  const [diagnose, setDiagnose] = useState<DiagnoseView | null>(null)
+
+  const stage = localStage || stageOf(safeState.onboarding_stage)
+  const maskedKey = asString(safeState.exa_key_masked, "")
+  const keyState = asString(safeState.exa_key_state, "unknown").toLowerCase()
+  const lastError = asString(safeState.exa_last_error, "")
+  const proxyDetected = asBool(safeState.proxy_detected, false)
+  const fullChain = asList(safeState.effective_chain).length ? asList(safeState.effective_chain) : asList(safeState.chain)
+  const shownChain = proxyDetected ? fullChain : fullChain.filter((item) => item.toLowerCase() !== "duckduckgo")
+  const quotaNote = asString(safeState.quota_note, t("panel.quota.fallback"))
+  const hostSearch: HostSearchState = safeState.host_search && typeof safeState.host_search === "object" ? safeState.host_search : {}
+  const hostKnown = typeof hostSearch.exists === "boolean" || typeof hostSearch.running === "boolean"
+  const hostExists = asBool(hostSearch.exists, true)
+  const hostRunning = asBool(hostSearch.running, false)
+  const hostToggleable = asBool(hostSearch.toggleable, false)
+  const ssrfFakeIpKnown = typeof safeState.ssrf_fake_ip === "boolean"
+  const ssrfFakeIp = asBool(safeState.ssrf_fake_ip, false)
+  const proxyMode = asString(safeState.proxy_mode, "-")
+
+  function hasAction(id: string): boolean {
+    return actionList.some((action) => action.id === id || action.entry_id === id)
+  }
+
+  // 动作注册表读不到时不锁死面板（W5 可能没给某些 id 打 @ui.action 元数据）；
+  // 一旦注册表非空，就按 id 精确禁用按钮。
+  function canCall(id: string): boolean {
+    if (!actionRegistryLoaded) return true
+    return hasAction(id)
+  }
+
+  // 任意一个动作在跑时就锁住全部按钮，避免重复提交；参数只为调用处可读。
+  function busy(_pendingKey: string): boolean {
+    return pending !== ""
+  }
+
+  function label(pendingKey: string, textKey: string): string {
+    return pending === pendingKey ? t("panel.messages.working") : t(textKey)
+  }
+
+  function showNotice(message: string, isError: boolean) {
+    setNotice(message)
+    setNoticeIsError(isError)
+  }
+
+  async function runAction(id: string, args: ActionRecord, pendingKey: string, timeoutMs?: number): Promise<ActionRecord | null> {
+    if (!canCall(id)) {
+      toast.error(t("panel.errors.actionUnavailable"))
+      return null
+    }
+    setPending(pendingKey)
+    try {
+      const envelope = timeoutMs
+        ? await props.api.call(id, args, { timeoutMs })
+        : await props.api.call(id, args)
+      return unwrapActionResult(envelope)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      toast.error(message)
+      showNotice(message, true)
+      return null
+    } finally {
+      setPending("")
+    }
+  }
+
+  // 状态以面板 context 为准；乐观值只在下一次刷新前短暂生效。
+  async function refreshContext(optimisticStage?: string): Promise<void> {
+    if (optimisticStage) setLocalStage(optimisticStage)
+    try {
+      await props.api.refresh()
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      toast.error(t("panel.errors.refreshFailed", { detail }))
+    }
+    setLocalStage("")
+  }
+
+  async function copyRegisterUrl(): Promise<void> {
+    const copied = await clipboard.write(EXA_KEY_PAGE)
+    if (copied) toast.success(t("panel.guide.urlCopied"))
+    else toast.error(t("panel.guide.copyFailed"))
+  }
+
+  async function saveKey(): Promise<void> {
+    const value = keyDraft.trim()
+    if (!value) {
+      setKeyError(t("panel.guide.keyEmpty"))
+      return
+    }
+    setKeyError("")
+    const result = await runAction("save_exa_key", { key: value }, "save", 60000)
+    if (!result) return
+    const ok = resultOk(result)
+    const message = resultMessage(result) || (ok ? t("panel.messages.keySaved") : t("panel.messages.keySaveFailed"))
+    setKeyDraft("")
+    setReplaceOpen(false)
+    showNotice(message, !ok)
+    if (ok) toast.success(message)
+    else toast.error(message)
+    await refreshContext("done")
+  }
+
+  async function startTrial(): Promise<void> {
+    const result = await runAction("set_onboarding", { stage: "trial" }, "trial")
+    if (!result) return
+    const ok = resultOk(result)
+    if (ok) toast.info(t("panel.messages.trialStarted"))
+    await refreshContext("trial")
+  }
+
+  async function openGuide(): Promise<void> {
+    const result = await runAction("show_guide", {}, "guide")
+    if (!result) return
+    setReplaceOpen(false)
+    setKeyDraft("")
+    await refreshContext("welcome")
+  }
+
+  async function testKey(): Promise<void> {
+    const result = await runAction("test_exa_key", {}, "test", 60000)
+    if (!result) return
+    const ok = resultOk(result)
+    const parts: string[] = [resultMessage(result) || (ok ? t("panel.messages.testOk") : t("panel.messages.testFailed"))]
+    const latency = latencyText(result.latency_ms)
+    if (latency) parts.push(t("panel.messages.testLatency", { latency }))
+    const count = Number(result.count)
+    if (Number.isFinite(count) && count > 0) parts.push(t("panel.messages.testCount", { count }))
+    showNotice(parts.join(" · "), !ok)
+    if (ok) toast.success(parts.join(" · "))
+    else toast.error(parts.join(" · "))
+    await refreshContext()
+  }
+
+  async function removeKey(): Promise<void> {
+    const accepted = await confirm({
+      title: t("panel.confirm.removeTitle"),
+      message: t("panel.confirm.removeMessage"),
+      tone: "danger",
+      confirmLabel: t("panel.confirm.removeOk"),
+      cancelLabel: t("panel.actions.cancel"),
+    })
+    if (!accepted) return
+    const result = await runAction("clear_exa_key", {}, "clear")
+    if (!result) return
+    const ok = resultOk(result)
+    const message = resultMessage(result) || (ok ? t("panel.messages.keyRemoved") : t("panel.messages.keyRemoveFailed"))
+    showNotice(message, !ok)
+    if (ok) toast.success(message)
+    else toast.error(message)
+    setKeyDraft("")
+    setReplaceOpen(false)
+    await refreshContext(ok ? "trial" : "")
+  }
+
+  async function toggleHostSearch(enabled: boolean): Promise<void> {
+    const result = await runAction("set_host_search", { enabled }, "host", 20000)
+    if (!result) return
+    const ok = resultOk(result)
+    const fallback = enabled ? t("panel.messages.hostOn") : t("panel.messages.hostOff")
+    const message = resultMessage(result) || (ok ? fallback : t("panel.messages.hostFailed"))
+    showNotice(message, !ok)
+    if (ok) toast.success(message)
+    else toast.error(message)
+    await refreshContext()
+  }
+
+  async function toggleSsrfGuard(enabled: boolean): Promise<void> {
+    const result = await runAction("set_ssrf_guard", { enabled }, "ssrf", 15000)
+    if (!result) return
+    const ok = resultOk(result)
+    const fallback = enabled ? t("panel.net.fakeIpOn") : t("panel.net.fakeIpOff")
+    const message = resultMessage(result) || (ok ? fallback : t("panel.errors.ssrfFailed"))
+    showNotice(message, !ok)
+    if (ok) toast.success(message)
+    else toast.error(message)
+    await refreshContext()
+  }
+
+  async function checkHostSearch(): Promise<void> {
+    const result = await runAction("get_host_search", {}, "hostcheck")
+    if (!result) return
+    const ok = resultOk(result)
+    const running = asBool(result.running, asBool(result.enabled, false))
+    const message = resultMessage(result) || t("panel.messages.hostChecked", { state: running ? t("panel.host.stateRunning") : t("panel.host.stateStopped") })
+    showNotice(message, !ok)
+    await refreshContext()
+  }
+
+  function toDiagnoseRows(value: unknown): DiagnoseRowView[] {
+    if (!Array.isArray(value)) return []
+    const rows: DiagnoseRowView[] = []
+    for (const item of value) {
+      if (typeof item === "string") {
+        rows.push({ name: item, direct: "-", ms: "-", note: "-" })
+        continue
+      }
+      if (!item || typeof item !== "object") continue
+      const record = item as ActionRecord
+      const name = asString(record.backend, asString(record.name, asString(record.source, "-")))
+      const directValue = record.direct
+      let direct = "-"
+      if (typeof directValue === "boolean") direct = directValue ? t("panel.diag.ok") : t("panel.diag.fail")
+      else if (typeof directValue === "string" && directValue.trim()) direct = directValue.trim()
+      const noteValue = asString(record.note, asString(record.message, "-"))
+      rows.push({ name, direct, ms: latencyText(record.ms) || "-", note: noteValue })
+    }
+    return rows
+  }
+
+  async function runDiagnose(): Promise<void> {
+    setDiagnose(null)
+    const result = await runAction("diagnose_network", { with_proxy: false }, "diagnose", 90000)
+    if (!result) return
+    const ok = resultOk(result)
+    const summary = resultMessage(result) || t("panel.diag.emptyResult")
+    const rows = toDiagnoseRows(result.rows)
+    const recommended = asList(result.recommended_chain)
+    setDiagnose({ summary, rows, recommended })
+    showNotice(summary, !ok)
+    await refreshContext()
+  }
+
+  function renderNotice() {
+    if (!notice) return null
+    return <Alert tone={noticeIsError ? "danger" : "info"}>{notice}</Alert>
+  }
+
+  function renderKeyField(placeholderKey: string) {
+    return (
+      <Field
+        label={t("panel.guide.keyField.label")}
+        help={t("panel.guide.keyField.help")}
+        error={keyError}
+        required
+      >
+        <PasswordInput
+          value={keyDraft}
+          placeholder={t(placeholderKey)}
+          disabled={pending === "save"}
+          onChange={(value) => setKeyDraft(value)}
+        />
+      </Field>
+    )
+  }
+
+  function keyBadge() {
+    if (!maskedKey) return <StatusBadge tone="warning" label={t("panel.key.notSaved")} />
+    if (keyState === "valid") return <StatusBadge tone="success" label={t("panel.key.valid")} />
+    if (keyState === "invalid") return <StatusBadge tone="danger" label={t("panel.key.invalid")} />
+    return <StatusBadge tone="info" label={t("panel.key.unknown")} />
+  }
+
+  function renderGuide() {
+    return (
+      <Card title={t("panel.guide.title")}>
+        <Stack>
+          <Alert tone="info">{t("panel.guide.intro")}</Alert>
+          <Text>{t("panel.guide.freeNote")}</Text>
+          <Steps>
+            <Step index="1" title={t("panel.guide.step1.title")}>
+              <Stack>
+                <Text>{t("panel.guide.step1.line1")}</Text>
+                <CodeBlock>{EXA_KEY_PAGE}</CodeBlock>
+                <Inline gap={2} wrap>
+                  <Button tone="default" onClick={copyRegisterUrl}>
+                    {t("panel.guide.copyUrl")}
+                  </Button>
+                  <Text>{t("panel.guide.step1.line1b")}</Text>
+                </Inline>
+                <Text>{t("panel.guide.step1.line2")}</Text>
+                <Text>{t("panel.guide.step1.line3")}</Text>
+              </Stack>
+            </Step>
+            <Step index="2" title={t("panel.guide.step2.title")}>
+              <Stack>
+                <Text>{t("panel.guide.step2.line1")}</Text>
+                {renderKeyField("panel.guide.keyField.placeholderGuide")}
+              </Stack>
+            </Step>
+            <Step index="3" title={t("panel.guide.step3.title")}>
+              <Text>{t("panel.guide.step3.line1")}</Text>
+            </Step>
+          </Steps>
+          {renderNotice()}
+          {lastError ? <Alert tone="warning">{lastError}</Alert> : null}
+          <Inline gap={3} wrap justify="space-between">
+            <Button tone="default" disabled={busy("trial")} onClick={startTrial}>
+              {label("trial", "panel.actions.tryFree")}
+            </Button>
+            <Button tone="success" disabled={busy("save") || !canCall("save_exa_key")} onClick={saveKey}>
+              {label("save", "panel.actions.saveKey")}
+            </Button>
+          </Inline>
+          <Tip>{quotaNote}</Tip>
+          <Tip>{t("panel.guide.quota")}</Tip>
+        </Stack>
+      </Card>
+    )
+  }
+
+  function renderKeyCard() {
+    return (
+      <Card title={t("panel.done.title")}>
+        <Stack>
+          <Grid cols={2}>
+            <StatCard label={t("panel.key.label")} value={maskOrDash(maskedKey)} />
+            <StatCard label={t("panel.key.stateLabel")} value={keyBadge()} />
+          </Grid>
+          <Text>{t("panel.done.line1")}</Text>
+          {lastError ? <Alert tone="warning">{lastError}</Alert> : null}
+          {replaceOpen ? renderKeyField("panel.guide.keyField.placeholderReplace") : null}
+          <Inline gap={3} wrap>
+            <Button tone="info" disabled={busy("test") || !canCall("test_exa_key")} onClick={testKey}>
+              {label("test", "panel.actions.test")}
+            </Button>
+            <Button
+              tone="primary"
+              disabled={busy("save") || !canCall("save_exa_key")}
+              onClick={() => {
+                setNotice("")
+                setKeyError("")
+                setReplaceOpen(true)
+              }}
+            >
+              {t("panel.actions.replace")}
+            </Button>
+            {replaceOpen ? (
+              <Button tone="success" disabled={busy("save") || !canCall("save_exa_key")} onClick={saveKey}>
+                {label("save", "panel.actions.saveReplacement")}
+              </Button>
+            ) : null}
+            {replaceOpen ? (
+              <Button
+                tone="default"
+                disabled={busy("save")}
+                onClick={() => {
+                  setReplaceOpen(false)
+                  setKeyDraft("")
+                  setKeyError("")
+                }}
+              >
+                {t("panel.actions.cancel")}
+              </Button>
+            ) : null}
+            <Button tone="danger" disabled={busy("clear") || !canCall("clear_exa_key")} onClick={removeKey}>
+              {label("clear", "panel.actions.remove")}
+            </Button>
+            <Button tone="default" disabled={busy("guide") || !canCall("show_guide")} onClick={openGuide}>
+              {label("guide", "panel.actions.showGuide")}
+            </Button>
+          </Inline>
+          {!actionRegistryLoaded ? <Text>{t("panel.errors.actionRegistryMissing")}</Text> : null}
+        </Stack>
+      </Card>
+    )
+  }
+
+  function renderTrialCard() {
+    return (
+      <Card title={t("panel.trial.title")}>
+        <Stack>
+          <Alert tone="info">{t("panel.trial.line1")}</Alert>
+          <Inline gap={3} wrap>
+            <Button tone="primary" disabled={busy("guide") || !canCall("show_guide")} onClick={openGuide}>
+              {label("guide", "panel.actions.configureKey")}
+            </Button>
+          </Inline>
+        </Stack>
+      </Card>
+    )
+  }
+
+  function renderChainCard() {
+    return (
+      <Card title={t("panel.chain.title")}>
+        <Stack>
+          {shownChain.length ? (
+            <Inline gap={2} wrap>
+              {shownChain.map((item) => (
+                <StatusBadge key={item} tone="primary" label={item} />
+              ))}
+            </Inline>
+          ) : (
+            <Text>{t("panel.chain.empty")}</Text>
+          )}
+          <Text>{proxyDetected ? t("panel.chain.duckShown") : t("panel.chain.duckHidden")}</Text>
+          <Text>{t("panel.net.proxyLabel")}: {proxyMode}</Text>
+          <Text>{quotaNote}</Text>
+          <Inline gap={3} wrap align="center" justify="space-between">
+            <Switch
+              checked={ssrfFakeIp}
+              label={t("panel.net.fakeIpLabel")}
+              disabled={busy("ssrf") || !ssrfFakeIpKnown || !canCall("set_ssrf_guard")}
+              onChange={(value) => toggleSsrfGuard(value)}
+            />
+            <StatusBadge
+              tone={!ssrfFakeIpKnown ? "info" : ssrfFakeIp ? "success" : "warning"}
+              label={!ssrfFakeIpKnown ? t("panel.net.unknown") : ssrfFakeIp ? t("panel.net.fakeIpOn") : t("panel.net.fakeIpOff")}
+            />
+          </Inline>
+          <Tip>{t("panel.net.fakeIpHelp")}</Tip>
+        </Stack>
+      </Card>
+    )
+  }
+
+  function renderHostCard() {
+    const hostDisabled = busy("host") || !hostToggleable || !hostExists || !canCall("set_host_search")
+    let hint = t("panel.host.help")
+    if (!hostKnown) hint = t("panel.host.stateUnknown")
+    else if (!hostExists) hint = t("panel.host.notFound")
+    else if (!hostToggleable) hint = t("panel.host.notToggleable")
+    else if (!canCall("set_host_search")) hint = t("panel.errors.actionUnavailable")
+    return (
+      <Card title={t("panel.host.title")}>
+        <Stack>
+          <Inline gap={3} wrap align="center" justify="space-between">
+            <Switch
+              checked={hostRunning}
+              label={t("panel.host.label")}
+              disabled={hostDisabled}
+              onChange={(value) => toggleHostSearch(value)}
+            />
+            <StatusBadge
+              tone={!hostKnown ? "info" : hostRunning ? "success" : "warning"}
+              label={!hostKnown ? t("panel.host.stateUnknown") : hostRunning ? t("panel.host.stateRunning") : t("panel.host.stateStopped")}
+            />
+          </Inline>
+          <Text>{hint}</Text>
+          <Inline gap={3} wrap>
+            <Button tone="default" disabled={busy("hostcheck") || !canCall("get_host_search")} onClick={checkHostSearch}>
+              {label("hostcheck", "panel.actions.checkHost")}
+            </Button>
+          </Inline>
+        </Stack>
+      </Card>
+    )
+  }
+
+  function renderDiagnoseCard() {
+    return (
+      <Card title={t("panel.diag.title")}>
+        <Stack>
+          <Text>{t("panel.diag.help")}</Text>
+          <Alert tone="warning">{t("panel.diag.cost")}</Alert>
+          <Inline gap={3} wrap>
+            <Button tone="primary" disabled={busy("diagnose") || !canCall("diagnose_network")} onClick={runDiagnose}>
+              {label("diagnose", "panel.actions.runDiagnose")}
+            </Button>
+            <RefreshButton label={t("panel.actions.refresh")} />
+          </Inline>
+          {diagnose ? (
+            <Stack>
+              <Text>{t("panel.diag.summary")}</Text>
+              <Alert tone="info">{diagnose.summary || t("panel.diag.emptyResult")}</Alert>
+              {diagnose.rows.length ? (
+                <DataTable
+                  data={diagnose.rows}
+                  rowKey="name"
+                  columns={[
+                    { key: "name", label: t("panel.diag.column.name") },
+                    { key: "direct", label: t("panel.diag.column.direct") },
+                    { key: "ms", label: t("panel.diag.column.ms") },
+                    { key: "note", label: t("panel.diag.column.note") },
+                  ]}
+                  emptyText={t("panel.diag.none")}
+                />
+              ) : (
+                <Text>{t("panel.diag.none")}</Text>
+              )}
+              {diagnose.recommended.length ? (
+                <Text>{t("panel.diag.recommended", { chain: diagnose.recommended.join(" → ") })}</Text>
+              ) : null}
+            </Stack>
+          ) : null}
+        </Stack>
+      </Card>
+    )
+  }
+
+  function renderHome() {
+    return (
+      <Stack>
+        {renderNotice()}
+        {stage === "trial" ? renderTrialCard() : renderKeyCard()}
+        {renderChainCard()}
+        {renderHostCard()}
+        {renderDiagnoseCard()}
+      </Stack>
+    )
+  }
+
+  return (
+    <Page title={t("panel.title")} subtitle={t("panel.subtitle")}>
+      <Stack>
+        {stage === "welcome" ? renderGuide() : renderHome()}
+      </Stack>
+    </Page>
+  )
+}

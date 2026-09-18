@@ -40,6 +40,23 @@ def test_both_locales_carry_the_same_keys() -> None:
     assert set(zh) - set(en) == set() and set(en) - set(zh) == set()
 
 
+def test_panel_copy_tries_the_silent_paths_before_the_host_hook() -> None:
+    """The host's useClipboard() reports its own rejections to the panel frame.
+
+    Its hook only checks that writeText *exists*, so under a blocking
+    Permissions-Policy it awaits, catches the DOMException and calls
+    reportHostedRuntimeError('clipboard.write') -> the user sees
+    "插件界面控件错误" even though the hook returns a clean false. Calling it first
+    therefore painted the banner on every attempt; the paths that can fail
+    silently have to come first.
+    """
+    root = Path(__file__).resolve().parents[1]
+    tsx = (root / "ui" / "panel.tsx").read_text(encoding="utf-8")
+    body = tsx[tsx.index("async function copyRegisterUrl"):][:600]
+    order = [body.index(call) for call in ("nativeCopy(", "legacyCopy(", "clipboard.write(")]
+    assert order == sorted(order), f"copy fallback order regressed: {order}"
+
+
 def test_plugin_manifest_exists() -> None:
     root = Path(__file__).resolve().parents[1]
     manifest = root / "plugin.toml"

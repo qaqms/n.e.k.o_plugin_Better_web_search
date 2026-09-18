@@ -130,6 +130,21 @@ function latencyText(value: unknown): string {
   return `${(ms / 1000).toFixed(1)} s`
 }
 
+async function nativeCopy(text: string): Promise<boolean> {
+  // Use the async API directly instead of the host's useClipboard() hook: that
+  // hook only checks whether writeText *exists*, so under a blocking
+  // Permissions-Policy it awaits, catches the DOMException and reports it through
+  // reportHostedRuntimeError('clipboard.write') -- which the panel frame renders
+  // as "插件界面控件错误" even though the hook hands back a clean false. Doing the
+  // call here keeps the rejection ours to swallow.
+  try {
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch {
+    return false
+  }
+}
+
 function legacyCopy(text: string): boolean {
   // The legacy selection copy is not gated by the Clipboard Permissions-Policy,
   // so it is the fallback whenever the async API is blocked by the host.
@@ -249,19 +264,15 @@ export default function FreeWebSearchPanel(props: PluginSurfaceProps<PanelState>
   }
 
   async function copyRegisterUrl(): Promise<void> {
-    // Panels are rendered inside a document whose Permissions-Policy blocks the
-    // async Clipboard API (crbug.com/414348233), so clipboard.write() can reject
-    // outright instead of returning false -- an uncaught rejection shows up as a
-    // "插件界面控件错误" banner and looks like a broken plugin.
-    try {
-      if (await clipboard.write(EXA_KEY_PAGE)) {
-        toast.success(t("panel.guide.urlCopied"))
-        return
-      }
-    } catch {
-      // fall through to the selection-based copy
-    }
-    if (legacyCopy(EXA_KEY_PAGE)) toast.success(t("panel.guide.urlCopied"))
+    // Order matters: try the copies that can fail *silently* first. The host
+    // clipboard hook reports every internal rejection to the panel frame
+    // ("插件界面控件错误"), so it may only be the last resort -- by then a failure
+    // is real and the banner is informative rather than alarming.
+    // See crbug.com/414348233 for why the async API is blocked in this document.
+    let copied = await nativeCopy(EXA_KEY_PAGE)
+    if (!copied) copied = legacyCopy(EXA_KEY_PAGE)
+    if (!copied) copied = await clipboard.write(EXA_KEY_PAGE)
+    if (copied) toast.success(t("panel.guide.urlCopied"))
     else toast.error(t("panel.guide.copyFailed"))
   }
 

@@ -32,10 +32,13 @@
   `_persist` 现在在异常后**回读校验**：值确实写到了就当成功，只有回读不一致才报失败，文案也不再
   指向"目录权限"。真正该修的是宿主持久化回执通道（疑为 Windows Proactor 事件循环下
   `zmq add_reader` 缺陷，宿主日志里本轮出现 7 次该 RuntimeWarning）。
-- **面板"复制网址"不再炸控件**：宿主面板文档的 Permissions-Policy 屏蔽了异步
-  `navigator.clipboard.writeText`（crbug.com/414348233），`useClipboard().write()` 会**抛异常**
-  而不是返回 false，于是宿主弹出"插件界面控件错误"。现在捕获后回退到
-  `document.execCommand("copy")`（不受该策略限制），两条路都不行才提示手动选中。
+- **面板"复制网址"不再弹"插件界面控件错误"**。机制在宿主：`useClipboard()` 这个 hook 只检查
+  `writeText` **是不是个函数**（被 Permissions-Policy 屏蔽时它仍然是函数，crbug.com/414348233），
+  于是它 await → 捕到 DOMException → **顺手调 `reportHostedRuntimeError('clipboard.write')`**，
+  面板框架就把这条渲染成"插件界面控件错误"。它本身是干净地返回 false 的，所以插件侧 try/catch
+  **挡不住这个横幅**。改成自己直连 `navigator.clipboard.writeText`（失败静默）→ 再退到
+  `document.execCommand("copy")`（不受该策略限制）→ 最后才用宿主 hook，此时失败是真的不可用，
+  横幅才有信息量。新增静态用例锁住这个调用顺序。
 
 ### 开发闭环
 

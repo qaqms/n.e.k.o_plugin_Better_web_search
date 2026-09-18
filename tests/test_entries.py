@@ -572,6 +572,44 @@ def test_save_exa_key_still_says_no_when_the_write_really_failed(monkeypatch) ->
     assert "没能保存" in outcome.value["message"]
 
 
+def _stage_plugin(stage: str) -> FreeWebSearchPlugin:
+    return make_plugin({"backend_chain": ["exa"], "exa_api_key": SECRET},
+                       ui_={"onboarding_stage": stage})
+
+
+def _verify_stub(monkeypatch, kind: str) -> None:
+    async def fake_verify(self, key: str):      # patched on the class: takes self
+        if kind == "":
+            return True, 120, 3, "密钥可用", ""
+        return False, 120, 0, "密钥无效", kind
+    monkeypatch.setattr(entries.FreeWebSearchPlugin, "_verify_exa_key", fake_verify)
+
+
+def test_verified_key_finishes_the_guide_persistently(monkeypatch) -> None:
+    """The stage must be written, not just painted: the panel's optimistic local
+    stage was cleared by its own refresh, so the guide came back every open."""
+    _verify_stub(monkeypatch, "")
+    plugin = _stage_plugin("trial")
+    asyncio.run(plugin.save_exa_key(key=SECRET))
+    assert plugin.config.data["ui"]["onboarding_stage"] == "done"
+    assert plugin._text_in("ui", "onboarding_stage") == "done"
+
+
+def test_rejected_key_leaves_the_guide_where_it_was(monkeypatch) -> None:
+    _verify_stub(monkeypatch, "key")
+    plugin = _stage_plugin("trial")
+    asyncio.run(plugin.save_exa_key(key=SECRET))
+    assert plugin.config.data["ui"]["onboarding_stage"] == "trial"
+
+
+def test_testing_a_saved_key_also_finishes_the_guide(monkeypatch) -> None:
+    _verify_stub(monkeypatch, "")
+    plugin = _stage_plugin("")
+    outcome = asyncio.run(plugin.test_exa_key())
+    assert outcome.is_ok() and outcome.value["ok"] is True
+    assert plugin.config.data["ui"]["onboarding_stage"] == "done"
+
+
 def test_save_exa_key_persists_reloads_and_reports_masked(monkeypatch) -> None:
     def good(query, limit, *, timeout, policy, proxy_url, live_crawl=False,
              api_key="", tool="auto"):

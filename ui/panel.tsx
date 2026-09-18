@@ -610,6 +610,10 @@ export default function FreeWebSearchPanel(props: PluginSurfaceProps<PanelState>
   }
 
   function renderHostCard() {
+    // The switch used to be labelled "内置「网络搜索」正在运行" -- a status sentence on an
+    // intent control, so it kept reading as a claim after the built-in search was stopped and
+    // looked like the toggle had done nothing. It now states the intent (on = stopped for us)
+    // and only the badge asserts a state.
     const hostDisabled = busy("host") || !hostToggleable || !hostExists || !canCall("set_host_search")
     let hint = t("panel.host.help")
     if (!hostKnown) hint = t("panel.host.stateUnknown")
@@ -621,10 +625,10 @@ export default function FreeWebSearchPanel(props: PluginSurfaceProps<PanelState>
         <Stack>
           <Inline gap={3} wrap align="center" justify="space-between">
             <Switch
-              checked={hostRunning}
+              checked={hostKnown && !hostRunning}
               label={t("panel.host.label")}
               disabled={hostDisabled}
-              onChange={(value) => toggleHostSearch(value)}
+              onChange={(value) => toggleHostSearch(!value)}
             />
             <StatusBadge
               tone={!hostKnown ? "info" : hostRunning ? "success" : "warning"}
@@ -647,6 +651,12 @@ export default function FreeWebSearchPanel(props: PluginSurfaceProps<PanelState>
       <Card title={t("panel.diag.title")}>
         <Stack>
           <Text>{t("panel.diag.help")}</Text>
+          {/* Without this the table is ambiguous: users read "搜索来源" as "the host's
+              search" or "the AI model", and never learn whether exa was probed with
+              their key or anonymously. */}
+          <Tip>{t("panel.diag.scope", { chain: shownChain.join(" → ") || "-" })}</Tip>
+          <Tip>{maskedKey ? t("panel.diag.exaWithKey", { masked: maskedKey }) : t("panel.diag.exaAnonymous")}</Tip>
+          <Tip>{hostRunning ? t("panel.diag.hostUnrelatedOn") : t("panel.diag.hostUnrelatedOff")}</Tip>
           <Alert tone="warning">{t("panel.diag.cost")}</Alert>
           <Switch
             checked={withProxy}
@@ -695,7 +705,10 @@ export default function FreeWebSearchPanel(props: PluginSurfaceProps<PanelState>
     return (
       <Stack>
         {renderNotice()}
-        {stage === "trial" ? renderTrialCard() : renderKeyCard()}
+        {/* A key in the config outranks the stored stage: installs made before the
+            stage was persisted would otherwise keep being told "you are on the free
+            tier, go configure a key" while a working key sits right there. */}
+        {stage === "trial" && !maskedKey ? renderTrialCard() : renderKeyCard()}
         {renderChainCard()}
         {renderHostCard()}
         {renderDiagnoseCard()}

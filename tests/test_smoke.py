@@ -57,6 +57,22 @@ def test_panel_copy_tries_the_silent_paths_before_the_host_hook() -> None:
     assert order == sorted(order), f"copy fallback order regressed: {order}"
 
 
+def test_host_switch_states_intent_not_status() -> None:
+    """The built-in-search control must not read like a status line.
+
+    It used to be labelled "内置「网络搜索」正在运行" with checked=running, so after the
+    user stopped it the sentence stayed on screen and looked like a failed toggle.
+    The badge is the only status claim now; the switch carries the (inverted) intent.
+    """
+    root = Path(__file__).resolve().parents[1]
+    tsx = (root / "ui" / "panel.tsx").read_text(encoding="utf-8")
+    body = tsx[tsx.index("function renderHostCard"):][:1400]
+    assert "checked={hostKnown && !hostRunning}" in body
+    assert "toggleHostSearch(!value)" in body
+    assert "正在运行" not in _load_locale("zh-CN")["panel.host.label"]
+    assert "is running" not in _load_locale("en")["panel.host.label"]
+
+
 def test_plugin_manifest_exists() -> None:
     root = Path(__file__).resolve().parents[1]
     manifest = root / "plugin.toml"

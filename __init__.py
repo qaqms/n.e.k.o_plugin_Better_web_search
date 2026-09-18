@@ -896,6 +896,20 @@ class FreeWebSearchPlugin(NekoPluginBase):
         host_search = await asyncio.to_thread(self._host_search_state_sync, 2.5)
         return self._build_panel_context(host_search)
 
+    async def _finish_onboarding_if_verified(self, kind: str) -> None:
+        """A verified key ends the guide -- persist that, don't just paint it.
+
+        The panel used to fake it with an optimistic local stage that its own
+        refresh cleared again, and nothing ever wrote ``[ui].onboarding_stage``,
+        so every reopen landed back on the guide (or the "you are on the free
+        tier" card) even with a working key in the config.
+        """
+        if kind != "":
+            return
+        if self._text_in("ui", "onboarding_stage") == "done":
+            return
+        await self._persist({"ui": {"onboarding_stage": "done"}})
+
     async def _verify_exa_key(self, key: str) -> tuple[bool, int, int, str, str]:
         """One real search with ``key``. Returns (ok, ms, count, 中文文案, kind).
 
@@ -968,6 +982,7 @@ class FreeWebSearchPlugin(NekoPluginBase):
         self._apply_exa_verify_state(kind if saved else "network")
         if not saved:
             message = "密钥没能保存：宿主没有确认这次配置写入，请再点一次保存（不填密钥也能搜索）"
+        await self._finish_onboarding_if_verified(kind if saved else "network")
         return Ok({
             "ok": bool(ok and saved),
             "masked": self._mask_key(text),
@@ -1011,6 +1026,7 @@ class FreeWebSearchPlugin(NekoPluginBase):
                        "latency_ms": 0, "count": 0})
         ok, ms, count, message, kind = await self._verify_exa_key(key)
         self._apply_exa_verify_state(kind)
+        await self._finish_onboarding_if_verified(kind)
         return Ok({"ok": bool(ok), "message": message, "latency_ms": ms, "count": count})
 
     @ui.action(label="停用/启用内置搜索", icon="🔀", group="host", order=10, refresh_context=True)

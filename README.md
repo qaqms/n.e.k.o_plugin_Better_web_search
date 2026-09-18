@@ -1,4 +1,4 @@
-# 免费联网搜索 / Free Web Search
+# 更好的网络搜索 / Better Web Search
 
 给 N.E.K.O 的免 API Key 联网搜索 + 网页正文阅读插件。**装好就能用，不需要注册任何服务、不需要填任何 Key。**
 
@@ -56,9 +56,15 @@
 
 ```bash
 cd N.E.K.O
-PYTHONDONTWRITEBYTECODE=1 uv run neko-plugin build "../plugins/free_web_search"
-# 产物：N.E.K.O/plugin/neko_plugin_cli/target/free_web_search.neko-plugin
+PYTHONDONTWRITEBYTECODE=1 uv run python -m plugin.neko_plugin_cli build "../plugins/better_web_search"
+# 产物：N.E.K.O/plugin/neko_plugin_cli/target/better_web_search.neko-plugin
 ```
+
+> **老名字 `free_web_search` 装过的话，先卸载再导入**：插件 id 换了，宿主**不会**把
+> `plugins/free_web_search/config/` 搬过去（`registry.py:1461 _migrate_plugin_id` 只搬进程内的注册表
+> 映射，不碰磁盘配置），所以 Exa 密钥、接管开关、引导进度都要重填。包里声明了
+> `[plugin].previous_ids = ["free_web_search"]`，旧插件还在的时候导入会被直接拒绝并提示冲突
+> （`install_plan.py:135-153`），这是故意的——两个都注册了 `search` 工具的插件同时活着比装不上更糟。
 
 > **构建后花一秒自验包**（元数据在不在 = 面板能不能用；测试夹具不该在里面）：
 >
@@ -68,12 +74,12 @@ PYTHONDONTWRITEBYTECODE=1 uv run neko-plugin build "../plugins/free_web_search"
 > print('plugin.meta.json:', any('plugin.meta.json' in x for x in n) or '缺失！这份包不能让面板正常工作'); \
 > print('tests/ leaked:', any('/tests/' in x for x in n) or 'no'); \
 > print('quickstart.md:', any('docs/quickstart.md' in x for x in n) or '缺失！教程打不开')" \
-> N.E.K.O/plugin/neko_plugin_cli/target/free_web_search.neko-plugin
+> N.E.K.O/plugin/neko_plugin_cli/target/better_web_search.neko-plugin
 > ```
 >
 > 干净的样子是 `files: 24`、`tests/ leaked: no`、`quickstart.md: True`。
 >
-> 实测过的坑：本机 `neko-plugin` 这个命令入口（venv 里的 console script）会解析到**另一份旧的宿主
+> 实测过的坑：`neko-plugin` 这个命令入口（venv 里的 console script）可能解析到**另一份旧的宿主
 > 检出**，那份 CLI 还没有 entry 元数据探测步骤，于是构建照样 `[OK]`、**不打任何警告**，但产物里没有
 > `plugin.meta.json`。宿主只能退回"从 manifest 猜入口"，静态注册表拿到空集，面板每个按钮都回
 > `UI action 'xxx' is not a plugin entry`（404，文案还骗人——它说的是"一个入口都没注册上"）。
@@ -84,11 +90,11 @@ Windows PowerShell 下这样带环境变量：
 
 ```powershell
 $env:PYTHONDONTWRITEBYTECODE = "1"
-uv run neko-plugin build "../plugins/free_web_search"
+uv run python -m plugin.neko_plugin_cli build "../plugins/better_web_search"
 ```
 
-> 本仓库独立检出在别处时（例如与 `N.E.K.O` 同级的 `n.e.k.o_plugin_Better_web_search`），把路径参数
-> 换成那个目录名即可，"在宿主根目录执行"这一条不能变。
+> 本仓库独立检出在别处时（例如与 `N.E.K.O` 同级、目录名保留自旧仓库名的
+> `n.e.k.o_plugin_Better_web_search`），把路径参数换成那个目录名即可，"在宿主根目录执行"这一条不能变。
 
 > **为什么要加 `PYTHONDONTWRITEBYTECODE=1`**：`neko-plugin build` 会 import 插件来探测它的 entry 元数据，
 > 而探测用的是**暂存目录里的那份副本**（构建日志里能看到它在 `%TEMP%\neko_build_<插件 id>\payload\plugins\…`
@@ -143,8 +149,12 @@ takeover_search = false     # 在面板切"停用内置搜索"时自动置 true�
 当前目录既是插件源码，也是它自己的 Git 仓库。发版到插件市场时，GitHub 仓库名必须是：
 
 ```text
-n.e.k.o_plugin_free_web_search
+n.e.k.o_plugin_better_web_search
 ```
+
+> 比对是 `casefold()` 的（`release_cmd.py:231`），所以现在这个写作
+> `n.e.k.o_plugin_Better_web_search` 的仓库名**直接满足要求**，不需要去 GitHub 改名。
+> 这条是插件 id 从 `free_web_search` 改成 `better_web_search` 的附带收益之一。
 
 在本仓库根目录（`neko-plugin` 换成 `python -m plugin.neko_plugin_cli` 的原因见上文那条坑注）：
 
@@ -188,19 +198,22 @@ docs/plan-*.md   施工单，内部文档（**不进分发包**）
 uv run --project "../../N.E.K.O" python -m plugin.neko_plugin_cli publish .
 ```
 
-先在 [Market 投稿页](https://market.project-neko.cn/#/upload) 用 GitHub 仓库地址提交一次审核，通过后这条命令会打 tag、等 GitHub Release、再通知 Market。`.github/workflows/release.yml` 会构建并上传 `free_web_search.neko-plugin`，Market 独立校验该 Release 后才上架。
+先在 [Market 投稿页](https://market.project-neko.cn/#/upload) 用 GitHub 仓库地址提交一次审核，通过后这条命令会打 tag、等 GitHub Release、再通知 Market。`.github/workflows/release.yml` 会构建并上传 `better_web_search.neko-plugin`，Market 独立校验该 Release 后才上架。
 
 发布前两条会**直接报 error** 的硬条件（`plugin/neko_plugin_cli/commands/release_cmd.py`）：
 
 | 条件 | 代码位置 | 本仓库现状 |
 | --- | --- | --- |
-| git origin 的仓库名必须是 `n.e.k.o_plugin_free_web_search` | `release_cmd.py:230-232` | ❌ 现在叫 `n.e.k.o_plugin_Better_web_search`，要在 GitHub 上改名后 `git remote set-url` |
-| tag 去掉 `v` 前缀后必须等于 `plugin.toml` 的 `version` | `release_cmd.py:237-239` | ✅ 发 `v0.2.1` 即可；`tests/test_smoke.py::test_release_version_is_stated_once` 保证 `plugin.toml` 与 `pyproject.toml` 不打架 |
+| git origin 的仓库名必须是 `n.e.k.o_plugin_<插件 id>` | `release_cmd.py:230-232`（`casefold()` 比对） | ✅ id 改成 `better_web_search` 后，现有的 `n.e.k.o_plugin_Better_web_search` 就满足了 |
+| tag 去掉 `v` 前缀后必须等于 `plugin.toml` 的 `version` | `release_cmd.py:237-239` | ✅ 发 `v0.3.0`；`tests/test_smoke.py::test_release_version_is_stated_once` 保证 `plugin.toml` 与 `pyproject.toml` 不打架 |
+
+> 剩下没做的只有"打 tag + 投稿 Market"这一步：本仓库至今**零 tag**（v0.2.0/v0.2.1 都没打过），
+> 所以 Market 上至今没有这个插件。
 
 ## Entry
 
 ```toml
-entry = "plugin.plugins.free_web_search:FreeWebSearchPlugin"
+entry = "plugin.plugins.better_web_search:BetterWebSearchPlugin"
 ```
 
 插件被安装到用户目录后，宿主会把 `plugin.plugins.*` 前缀改写成 `plugins.*` 再加载，因此开发时（挂在 N.E.K.O 源码树里）和安装后（在用户插件目录）用同一个 entry 字符串即可。

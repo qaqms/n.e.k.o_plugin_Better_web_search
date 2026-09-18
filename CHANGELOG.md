@@ -1,5 +1,51 @@
 # 更新记录
 
+## v0.3.0（2026-09-19）
+
+改名：**免费联网搜索 / `free_web_search`** → **更好的网络搜索 / `better_web_search`**。功能、配置项、
+面板行为一个字没动；"不需要任何 API Key"仍然是首要卖点，只是不再写进名字里。
+
+### 改名波及的面
+
+- 插件 id、`entry`（`plugin.plugins.better_web_search:BetterWebSearchPlugin`）、类名
+  `FreeWebSearchPlugin` → `BetterWebSearchPlugin`、面板默认导出组件名、错误码前缀
+  `FREE_WEB_SEARCH_*` → `BETTER_WEB_SEARCH_*`、`pyproject.toml` 的项目名、首启话术里自称的名字、
+  `search` 入口喂给模型的 `name`、ready 日志前缀、`push_message` 的 `source`，以及
+  `.github/workflows/{verify,release}.yml` 里当参数写死的 `plugin-id:`（这条最容易漏——它本地全绿，
+  只在 GitHub 上才炸）。
+- **插件中心显示的名字来自 i18n，不是 `plugin.toml`**：宿主
+  `plugin/server/application/plugins/query_service.py:211-222` 用 `plugin.name` 这个 i18n 键**覆盖**
+  `[plugin].name`（TOML 只在缺键时兜底）。所以真正看得见的名字改的是 `i18n/zh-CN.json` 与
+  `i18n/en.json` 的 `plugin.name` + `panel.title`，TOML 那份只是 Market 侧的兜底。
+- 附带收益：Market 要求的仓库名是 `n.e.k.o_plugin_<id>`，而比对是 `casefold()`
+  （`release_cmd.py:231`），所以 GitHub 上现有的 `n.e.k.o_plugin_Better_web_search` **直接就过了**，
+  不用再去改仓库名——这是 v0.2.1 时记下的那条发布阻塞的直接解除。
+
+### 装过旧版的要注意（真实代价）
+
+- **配置不会跟着搬**：宿主没有"改 id 就迁移数据"这回事。`plugin/core/registry.py:1461`
+  的 `_migrate_plugin_id` 只搬进程内的注册表映射（hosts / event handlers / entry 方法表），
+  磁盘上的 `plugins/free_web_search/config/plugin.toml` 原封不动，新 id 从空白配置开始 ⇒
+  **Exa 密钥、`[host].takeover_search` 意图、引导进度都要重填一次**。
+- **必须先卸载旧插件**：包里声明了 `[plugin].previous_ids = ["free_web_search"]`，旧插件还装着时
+  导入会被直接判为 `reason=legacy_plugin_present` 并弹冲突提示（`install_plan.py:135-153` →
+  前端 `usePluginPackageInstaller.ts:88-101`）。这是故意的：新旧两份都注册 `search` 工具同时活着，
+  比装不上更糟。
+- 日志文件名会跟着 id 变成 `N.E.K.O_Plugin_better_web_search_<日期>.log`；老的
+  `..._free_web_search_...` 那份是历史，不用管。
+- 内置搜索的停用状态存在宿主的 `plugin_runtime_overrides.json` 里、按内置插件自己的 id 记账，
+  所以换名**不会**把内置 `web_search` 悄悄启回来；新插件启动时会按重填后的 `[host].takeover_search`
+  重申一次。
+
+### 用例
+
+新增 `test_name_is_the_same_everywhere`（231 → 232）：id、`entry` 里的类名、`pyproject.toml` 项目名、
+i18n 显示名、TOML `name` 五者互相对齐，并把运行期会碰到的文件（`__init__.py`、`_*.py`、
+`ui/panel.tsx`、两份 i18n、`docs/quickstart.md`、两份 workflow）整体扫一遍——出现任何旧标识符就失败。
+
+选在这时候改 id 的理由：本仓库至今零 tag、从未上过 Market，除了用户自己机器上的导入记录没有任何
+历史包袱；发布之后再改就要永久背着 `previous_ids` 和别人的配置了。
+
 ## v0.2.1（2026-09-19）
 
 一轮"说的和做的对上"的修正：把配置项、自检、开关语义、面板文案与真实行为重新对齐，并顺手把

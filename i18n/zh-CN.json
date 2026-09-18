@@ -1,8 +1,8 @@
 {
-  "plugin.name": "免费联网搜索",
+  "plugin.name": "更好的网络搜索",
   "plugin.description": "不需要 API Key 的联网搜索与网页正文阅读，开箱即用；失败自动切换后端。自带面板新手引导（可一键填入 Exa 免费密钥）、内置搜索双向开关、代理软件兼容开关与网络自检；也支持代理与自建 SearXNG。",
 
-  "panel.title": "免费联网搜索",
+  "panel.title": "更好的网络搜索",
   "panel.subtitle": "第一次用先看这里：注册 Exa 拿一把免费密钥，或者点「先体验」用免费额度先跑起来。",
 
   "panel.guide.title": "三步接入（大概 3 分钟）",

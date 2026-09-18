@@ -1,6 +1,6 @@
 [project]
-name = "free_web_search"
-version = "0.2.1"
+name = "better_web_search"
+version = "0.3.0"
 # Intentionally empty: this plugin is stdlib-only so the distributed package
 # needs no vendor/ tree. See README.
 dependencies = []

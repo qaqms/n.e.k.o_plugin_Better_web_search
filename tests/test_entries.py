@@ -20,7 +20,7 @@ net = conftest.load("_net")
 providers = conftest.load("_providers")
 resilience = conftest.load("_resilience")
 
-FreeWebSearchPlugin = entries.FreeWebSearchPlugin
+BetterWebSearchPlugin = entries.BetterWebSearchPlugin
 ApiKeyRejectedError = resilience.ApiKeyRejectedError
 QuotaExhaustedError = resilience.QuotaExhaustedError
 
@@ -75,7 +75,7 @@ class FakeCtx:
 
 def make_plugin(search: dict | None = None, *, net_: dict | None = None,
                 ui_: dict | None = None, host_: dict | None = None,
-                data: dict | None = None) -> FreeWebSearchPlugin:
+                data: dict | None = None) -> BetterWebSearchPlugin:
     """A plugin instance with config sections set, no host, no real __init__."""
     if data is None:
         data = {
@@ -84,7 +84,7 @@ def make_plugin(search: dict | None = None, *, net_: dict | None = None,
             "ui": dict(ui_ or {}),
             "host": dict(host_ or {}),
         }
-    plugin = object.__new__(FreeWebSearchPlugin)
+    plugin = object.__new__(BetterWebSearchPlugin)
     plugin.ctx = FakeCtx()
     plugin.logger = FakeLogger()
     plugin._cfg = {}
@@ -337,11 +337,11 @@ def test_dual_path_self_check_doubles_the_probe_pool(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 def test_mask_key_shapes() -> None:
-    assert FreeWebSearchPlugin._mask_key(SECRET) == f"exa****{TAIL}"
-    assert FreeWebSearchPlugin._mask_key("") == ""
-    assert FreeWebSearchPlugin._mask_key("   ") == ""
+    assert BetterWebSearchPlugin._mask_key(SECRET) == f"exa****{TAIL}"
+    assert BetterWebSearchPlugin._mask_key("") == ""
+    assert BetterWebSearchPlugin._mask_key("   ") == ""
     # A key this short must not be echoed even partially.
-    assert FreeWebSearchPlugin._mask_key("abcd") == "exa****"
+    assert BetterWebSearchPlugin._mask_key("abcd") == "exa****"
 
 
 def _install_key_error(monkeypatch, error, anonymous_ok=True):
@@ -397,7 +397,7 @@ def test_fallback_disabled_raises_sanitised_key_error(monkeypatch) -> None:
     assert calls == [SECRET]                              # no retry at all
     assert SECRET not in str(info.value)                  # upstream/ key text stripped
     assert "密钥无效" in str(info.value)
-    assert _error_code_for(info.value) == "FREE_WEB_SEARCH_KEY_INVALID"
+    assert _error_code_for(info.value) == "BETTER_WEB_SEARCH_KEY_INVALID"
 
 
 def test_quota_fallback_disabled_raises_quota_code(monkeypatch) -> None:
@@ -405,7 +405,7 @@ def test_quota_fallback_disabled_raises_quota_code(monkeypatch) -> None:
     plugin = make_plugin({"exa_api_key": SECRET, "exa_key_fallback_anonymous": False})
     with pytest.raises(QuotaExhaustedError) as info:
         plugin._fetcher("exa", "q", 3, 5.0)()
-    assert _error_code_for(info.value) == "FREE_WEB_SEARCH_QUOTA"
+    assert _error_code_for(info.value) == "BETTER_WEB_SEARCH_QUOTA"
     assert getattr(info.value, "retry_after_seconds", None) == 60.0
 
 
@@ -525,7 +525,7 @@ class _LostAckConfig(FakeConfig):
             "final persistence status is unknown")
 
 
-def _lost_ack_plugin(*, land: bool) -> FreeWebSearchPlugin:
+def _lost_ack_plugin(*, land: bool) -> BetterWebSearchPlugin:
     data = {"search": {"backend_chain": ["exa"], "exa_api_key": ""},
             "net": {}, "ui": {}, "host": {}}
     plugin = make_plugin()
@@ -572,7 +572,7 @@ def test_save_exa_key_still_says_no_when_the_write_really_failed(monkeypatch) ->
     assert "没能保存" in outcome.value["message"]
 
 
-def _stage_plugin(stage: str) -> FreeWebSearchPlugin:
+def _stage_plugin(stage: str) -> BetterWebSearchPlugin:
     return make_plugin({"backend_chain": ["exa"], "exa_api_key": SECRET},
                        ui_={"onboarding_stage": stage})
 
@@ -582,7 +582,7 @@ def _verify_stub(monkeypatch, kind: str) -> None:
         if kind == "":
             return True, 120, 3, "密钥可用", ""
         return False, 120, 0, "密钥无效", kind
-    monkeypatch.setattr(entries.FreeWebSearchPlugin, "_verify_exa_key", fake_verify)
+    monkeypatch.setattr(entries.BetterWebSearchPlugin, "_verify_exa_key", fake_verify)
 
 
 def test_verified_key_finishes_the_guide_persistently(monkeypatch) -> None:
@@ -710,7 +710,7 @@ def test_panel_context_caches_the_host_read_so_switches_stop_hanging(monkeypatch
         reads.append(timeout)
         return {"exists": True, "running": False, "toggleable": True}
 
-    monkeypatch.setattr(entries.FreeWebSearchPlugin, "_host_search_state_sync", fake_sync)
+    monkeypatch.setattr(entries.BetterWebSearchPlugin, "_host_search_state_sync", fake_sync)
     plugin = make_plugin()
     asyncio.run(plugin.panel_context())
     asyncio.run(plugin.panel_context())
@@ -719,7 +719,7 @@ def test_panel_context_caches_the_host_read_so_switches_stop_hanging(monkeypatch
 
     # A failed read must never age into "truth".
     plugin._host_state_cache = None
-    monkeypatch.setattr(entries.FreeWebSearchPlugin, "_host_search_state_sync",
+    monkeypatch.setattr(entries.BetterWebSearchPlugin, "_host_search_state_sync",
                         lambda self, timeout=4.0: {"exists": False, "running": False,
                                                    "toggleable": True, "error": "boom"})
     asyncio.run(plugin.panel_context())
@@ -733,7 +733,7 @@ def test_set_host_search_invalidates_the_cache_and_keeps_intent_on_failure(monke
         reads.append(1)
         return {"exists": True, "running": True, "toggleable": True}
 
-    monkeypatch.setattr(entries.FreeWebSearchPlugin, "_host_search_state_sync", fake_sync)
+    monkeypatch.setattr(entries.BetterWebSearchPlugin, "_host_search_state_sync", fake_sync)
     plugin = make_plugin()
     asyncio.run(plugin.panel_context())            # warms the cache
 
@@ -862,7 +862,7 @@ def test_startup_without_takeover_does_not_touch_host(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 def test_missing_sections_fall_back_to_defaults() -> None:
-    plugin = object.__new__(FreeWebSearchPlugin)
+    plugin = object.__new__(BetterWebSearchPlugin)
     plugin.logger = FakeLogger()
     plugin._cfg = {}
     plugin._sections = {name: {} for name in entries.CONFIG_SECTIONS}

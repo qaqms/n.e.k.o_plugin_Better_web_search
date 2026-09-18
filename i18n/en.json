@@ -1,8 +1,8 @@
 {
-  "plugin.name": "Free Web Search",
+  "plugin.name": "Better Web Search",
   "plugin.description": "Keyless web search and page reading. Works out of the box and falls back across several free backends. Ships a setup panel (optional one-paste Exa free API key), a two-way switch for the host's built-in search, a proxy-software compatibility toggle, and a network self-check; also supports proxies and your own SearXNG.",
 
-  "panel.title": "Free Web Search",
+  "panel.title": "Better Web Search",
   "panel.subtitle": "First time here? Register at Exa for a free key, or tap \"Try the free way\" and start searching right away.",
 
   "panel.guide.title": "Three steps (about 3 minutes)",

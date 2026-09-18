@@ -2,38 +2,44 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "N.E.K.O: check free_web_search",
+      "label": "N.E.K.O: check better_web_search",
       "type": "shell",
-      "command": "uv run neko-plugin check \"${workspaceFolder}\"",
+      "command": "uv run python -m plugin.neko_plugin_cli check \"${workspaceFolder}\"",
       "options": {
         "cwd": "${config:nekoPlugin.repoRoot}"
       },
       "problemMatcher": []
     },
     {
-      "label": "N.E.K.O: sync free_web_search",
+      "label": "N.E.K.O: sync better_web_search",
       "type": "shell",
-      "command": "uv run --with pip neko-plugin sync \"${workspaceFolder}\" --clean",
+      "command": "uv run --with pip python -m plugin.neko_plugin_cli sync \"${workspaceFolder}\" --clean",
       "options": {
         "cwd": "${config:nekoPlugin.repoRoot}"
       },
       "problemMatcher": []
     },
     {
-      "label": "N.E.K.O: check -r free_web_search",
+      "label": "N.E.K.O: check -r better_web_search",
       "type": "shell",
-      "command": "uv run neko-plugin check -r \"${workspaceFolder}\"",
+      "command": "uv run python -m plugin.neko_plugin_cli check -r \"${workspaceFolder}\"",
       "options": {
-        "cwd": "${config:nekoPlugin.repoRoot}"
+        "cwd": "${config:nekoPlugin.repoRoot}",
+        "env": {
+          "PYTHONDONTWRITEBYTECODE": "1"
+        }
       },
       "problemMatcher": []
     },
     {
-      "label": "N.E.K.O: build free_web_search",
+      "label": "N.E.K.O: build better_web_search",
       "type": "shell",
-      "command": "uv run neko-plugin build \"${workspaceFolder}\"",
+      "command": "uv run python -m plugin.neko_plugin_cli build \"${workspaceFolder}\"",
       "options": {
-        "cwd": "${config:nekoPlugin.repoRoot}"
+        "cwd": "${config:nekoPlugin.repoRoot}",
+        "env": {
+          "PYTHONDONTWRITEBYTECODE": "1"
+        }
       },
       "problemMatcher": []
     }

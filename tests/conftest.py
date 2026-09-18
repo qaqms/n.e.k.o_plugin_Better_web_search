@@ -13,7 +13,7 @@ import types
 from pathlib import Path
 
 PLUGIN_DIR = Path(__file__).resolve().parents[1]
-PACKAGE = "_free_web_search_under_test"
+PACKAGE = "_better_web_search_under_test"
 
 
 def _ensure_namespace() -> types.ModuleType:

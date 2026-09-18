@@ -1,13 +1,18 @@
 [plugin]
-name = "免费联网搜索"
-id = "free_web_search"
-version = "0.2.1"
+name = "更好的网络搜索"
+id = "better_web_search"
+# 旧名 free_web_search 从没上过 Market，这次是唯一的无包袱改名窗口。
+# 声明 previous_ids 不是"自动搬迁"，而是让宿主在旧插件还装着的时候**拒绝导入**
+# （install_plan.py:135-153 → 前端 package.install.blockedLegacyPlugin），避免出现
+# 两个都注册了 search 工具的插件抢活。请先卸载旧插件，再装这份。
+previous_ids = ["free_web_search"]
+version = "0.3.0"
 type = "plugin"
 description = "不需要任何 API Key 的联网搜索与网页正文阅读。开箱即用，失败自动换后端；自带面板新手引导（可一键填入 Exa 免费密钥）、内置搜索双向开关、代理软件兼容开关与网络自检；支持代理与自建 SearXNG。"
 short_description = "免 Key 联网搜索 + 网页正文，多后端自动回退；面板一键引导与自检。"
 keywords = ["搜索", "联网", "搜一", "查一查", "网页", "search", "web", "fetch", "免费",
             "duckduckgo", "google", "検索", "調べ", "검색", "поиск", "busca"]
-entry = "plugin.plugins.free_web_search:FreeWebSearchPlugin"
+entry = "plugin.plugins.better_web_search:BetterWebSearchPlugin"
 
 [plugin.author]
 name = "N.E.K.O Plugin Community"

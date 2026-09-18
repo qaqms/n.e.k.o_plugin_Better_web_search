@@ -1,4 +1,4 @@
-"""free_web_search - keyless web search and page reading for N.E.K.O.
+"""better_web_search - keyless web search and page reading for N.E.K.O.
 
 Design constraints, in order of why they matter:
 
@@ -83,11 +83,11 @@ DEFAULT_SSRF_ALLOW_RANGES = ("198.18.0.0/15",)
 HOST_STATE_TTL_SECONDS = 20.0
 
 _ERROR_CODES = {
-    "blocked": "FREE_WEB_SEARCH_BLOCKED",
-    "busy": "FREE_WEB_SEARCH_BUSY",
-    "cooldown": "FREE_WEB_SEARCH_COOLDOWN",
-    "key_invalid": "FREE_WEB_SEARCH_KEY_INVALID",
-    "quota": "FREE_WEB_SEARCH_QUOTA",
+    "blocked": "BETTER_WEB_SEARCH_BLOCKED",
+    "busy": "BETTER_WEB_SEARCH_BUSY",
+    "cooldown": "BETTER_WEB_SEARCH_COOLDOWN",
+    "key_invalid": "BETTER_WEB_SEARCH_KEY_INVALID",
+    "quota": "BETTER_WEB_SEARCH_QUOTA",
 }
 
 # User-facing copy. Never interpolate raw upstream text or the key here.
@@ -96,7 +96,7 @@ _MSG_QUOTA = "Exa 密钥额度已用尽：本次已改用匿名档，额度每�
 _MSG_NO_HOST = "未能连接宿主管理接口，请到插件中心手动开关『网络搜索』"
 _QUOTA_NOTE = "每月刷新 $10 ≈ 1400 次；不填 key 也能用，但匿名档慢且限额低"
 _ONBOARDING_HINT = (
-    "主人，『免费联网搜索』已经装好啦。请打开插件中心里的『联网搜索』面板："
+    "主人，『更好的网络搜索』已经装好啦。请打开插件中心里的『联网搜索』面板："
     "点【先体验】就能立刻免密钥搜索；想更快更稳，可以照面板里的教程注册一个 "
     "Exa 免费密钥（邮箱注册，每月 $10 额度）粘贴进去并一键测试。"
     "面板里还能一键停用系统自带的『网络搜索』，避免两个搜索插件互相抢活。"
@@ -128,7 +128,7 @@ async def _in_thread(func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any
 
 
 @neko_plugin
-class FreeWebSearchPlugin(NekoPluginBase):
+class BetterWebSearchPlugin(NekoPluginBase):
     """Free, keyless web search + page reading, with a setup panel."""
 
     def __init__(self, ctx):
@@ -354,7 +354,7 @@ class FreeWebSearchPlugin(NekoPluginBase):
         # Bools only: never log the Exa key itself, its presence is what matters
         # and the host logs plugin status verbatim.
         self.logger.info(
-            "free_web_search ready: chain={} effective={} proxy_mode={} system_proxy={} "
+            "better_web_search ready: chain={} effective={} proxy_mode={} system_proxy={} "
             "anysearch_key={} exa_key={}",
             order, effective, self._text("proxy", "auto"), proxies_present,
             bool(self._text("anysearch_api_key")), bool(self._text("exa_api_key")),
@@ -432,8 +432,8 @@ class FreeWebSearchPlugin(NekoPluginBase):
                     parts=[{"type": "text", "text": _ONBOARDING_HINT}],
                     visibility=[],
                     ai_behavior="respond",
-                    source="free_web_search",
-                    metadata={"description": "free_web_search 首次使用引导"},
+                    source="better_web_search",
+                    metadata={"description": "better_web_search 首次使用引导"},
                 )
             except Exception as error:
                 # Keep the flag false: a user who never saw the hint should get
@@ -691,7 +691,7 @@ class FreeWebSearchPlugin(NekoPluginBase):
 
     @plugin_entry(
         id="search",
-        name="免费联网搜索",
+        name="更好的网络搜索",
         description="免 API Key 的联网搜索，开箱即用。重要：query 保留用户原始语言（中文问题就用中文搜），"
                     "不要翻译成英文。需要看具体内容时，用返回结果里的 url 再调用 fetch 读取正文。",
         llm_result_fields=["summary"],
@@ -753,7 +753,7 @@ class FreeWebSearchPlugin(NekoPluginBase):
         } for item in outcome.get("results", []) if str(item.get("url") or "").startswith("http")]
         if not results:
             return Err(SdkError("没有搜索到结果，可稍后重试或在插件设置里换后端",
-                                code="FREE_WEB_SEARCH_EMPTY"))
+                                code="BETTER_WEB_SEARCH_EMPTY"))
         # Which backend actually answered is otherwise invisible: the host does not
         # log tool payloads, so "did my key serve this search?" could not be asked
         # after the fact.
@@ -793,7 +793,7 @@ class FreeWebSearchPlugin(NekoPluginBase):
         try:
             target = _guard.normalize_http_url(url, allow_ranges=self._ssrf_ranges())
         except _guard.UnsafeUrlError as error:
-            return Err(SdkError(f"链接不可访问: {error}", code="FREE_WEB_SEARCH_UNSAFE_URL"))
+            return Err(SdkError(f"链接不可访问: {error}", code="BETTER_WEB_SEARCH_UNSAFE_URL"))
 
         budget = max_chars if max_chars > 0 else self._int("max_content_chars", 4000, 200, 20000)
         budget = max(200, min(int(budget), 20000))  # pi-lens-ignore: unchecked-throwing-call-python
@@ -851,7 +851,7 @@ class FreeWebSearchPlugin(NekoPluginBase):
         if code == _ERROR_CODES["quota"]:
             return Err(SdkError(_MSG_QUOTA, code=code))
         message = str(last_error) if last_error else "无法读取该网页"
-        return Err(SdkError(message[:200], code=code or "FREE_WEB_SEARCH_FETCH_FAILED"))
+        return Err(SdkError(message[:200], code=code or "BETTER_WEB_SEARCH_FETCH_FAILED"))
 
     # ------------------------------------------------------------------
     # entries: panel (W4's ui/panel.tsx calls these action ids verbatim)
@@ -1274,10 +1274,10 @@ class FreeWebSearchPlugin(NekoPluginBase):
             )
         except (TimeoutError, asyncio.TimeoutError):
             return Err(SdkError("网络自检超时：网络可能太慢，请减少后端数量后再试",
-                                code="FREE_WEB_SEARCH_BUSY"))
+                                code="BETTER_WEB_SEARCH_BUSY"))
         except Exception as error:
             self.logger.info("diagnose failed: {}:{}", type(error).__name__, error)
-            return Err(SdkError("网络自检失败，请稍后重试", code="FREE_WEB_SEARCH_BLOCKED"))
+            return Err(SdkError("网络自检失败，请稍后重试", code="BETTER_WEB_SEARCH_BLOCKED"))
         return Ok({
             "summary": str(report.get("summary") or ""),
             "rows": list(report.get("rows") or []),

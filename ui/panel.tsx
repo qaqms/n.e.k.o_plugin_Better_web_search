@@ -1,4 +1,4 @@
-// free_web_search 插件面板（hosted-tsx）
+// better_web_search 插件面板（hosted-tsx）
 //
 // 只依赖 @neko/plugin-ui 的导出；不产生任何网络请求（注册网址只是纯文本，供用户复制）。
 // 密钥只显示后端返回的掩码，输入框内容在保存后立刻清空，面板不留明文。
@@ -167,7 +167,7 @@ function legacyCopy(text: string): boolean {
   }
 }
 
-export default function FreeWebSearchPanel(props: PluginSurfaceProps<PanelState>) {
+export default function BetterWebSearchPanel(props: PluginSurfaceProps<PanelState>) {
   const { actions, state, t } = props
   const toast = useToast()
   const confirm = useConfirm()

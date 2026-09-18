@@ -116,8 +116,11 @@ def test_plugin_manifest_exists() -> None:
     manifest = root / "plugin.toml"
     assert manifest.is_file()
     text = manifest.read_text(encoding="utf-8")
-    assert 'id = "free_web_search"' in text
-    assert 'entry = "plugin.plugins.free_web_search:FreeWebSearchPlugin"' in text
+    assert 'id = "better_web_search"' in text
+    assert 'entry = "plugin.plugins.better_web_search:BetterWebSearchPlugin"' in text
+    # The old id is declared so the importer refuses to install this side by side
+    # with a live free_web_search (two plugins would both register `search`).
+    assert 'previous_ids = ["free_web_search"]' in text
 
 
 def test_manifest_declares_panel_and_guide() -> None:
@@ -153,6 +156,41 @@ def test_default_config_sections_present_in_example() -> None:
                 "first_run_notice_sent", "takeover_search"):
         assert key in example, f"config.example.toml missing {key}"
     assert 'backend_chain = ["exa", "anysearch", "bing", "baidu"]' in example
+
+
+def test_name_is_the_same_everywhere() -> None:
+    """The v0.3.0 rename (free_web_search -> better_web_search) left no stragglers.
+
+    Three separate surfaces can disagree after a rename and each one is invisible
+    from the others: the plugin center renders the *i18n* `plugin.name`
+    (query_service.py:211-222 overrides the TOML value), Market renders the TOML
+    value, and the runtime renders strings baked into `__init__.py` and the panel.
+    So scan the runtime set for the old identifiers and pin the display name to
+    the manifest name.
+    """
+    manifest = _read_toml("plugin.toml")["plugin"]
+    plugin_id, entry, shown = manifest["id"], manifest["entry"], manifest["name"]
+
+    assert _read_toml("pyproject.toml")["project"]["name"] == plugin_id
+    module_name, class_name = entry.split(":")
+    assert module_name == f"plugin.plugins.{plugin_id}"
+    source = (_ROOT / "__init__.py").read_text(encoding="utf-8")
+    assert f"class {class_name}(NekoPluginBase):" in source, f"entry names {class_name}"
+
+    for locale in ("zh-CN", "en"):
+        catalog = _load_locale(locale)
+        assert catalog["plugin.name"] == catalog["panel.title"], f"{locale}: two titles"
+    assert _load_locale("zh-CN")["plugin.name"] == shown, "manifest name != displayed name"
+
+    for rel in ("__init__.py", "ui/panel.tsx", "docs/quickstart.md", "config.example.toml",
+                "i18n/zh-CN.json", "i18n/en.json",
+                # The market CI templates take the id as a workflow input, and a
+                # stale one there fails only on GitHub, long after every local gate.
+                ".github/workflows/verify.yml", ".github/workflows/release.yml",
+                *[p.name for p in _ROOT.glob("_*.py")]):
+        text = (_ROOT / rel).read_text(encoding="utf-8")
+        for stale in ("free_web_search", "FreeWebSearch", "FREE_WEB_SEARCH", "免费联网搜索"):
+            assert stale not in text, f"{rel} still says {stale!r}"
 
 
 def test_release_version_is_stated_once() -> None:

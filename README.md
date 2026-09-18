@@ -55,12 +55,30 @@ PYTHONDONTWRITEBYTECODE=1 uv run neko-plugin build "../plugins/free_web_search"
 # 产物：N.E.K.O/plugin/neko_plugin_cli/target/free_web_search.neko-plugin
 ```
 
+> **构建后花一秒自验包里有没有 `plugin.meta.json`：**
+>
+> ```bash
+> python -c "import zipfile,sys; n=zipfile.ZipFile(sys.argv[1]).namelist(); \
+> print('plugin.meta.json:', any('plugin.meta.json' in x for x in n) or '缺失！这份包不能让面板正常工作')" \
+> N.E.K.O/plugin/neko_plugin_cli/target/free_web_search.neko-plugin
+> ```
+>
+> 实测过的坑：本机 `neko-plugin` 这个命令入口（venv 里的 console script）会解析到**另一份旧的宿主
+> 检出**，那份 CLI 还没有 entry 元数据探测步骤，于是构建照样 `[OK]`、**不打任何警告**，但产物里没有
+> `plugin.meta.json`。宿主只能退回"从 manifest 猜入口"，静态注册表拿到空集，面板每个按钮都回
+> `UI action 'xxx' is not a plugin entry`（404，文案还骗人——它说的是"一个入口都没注册上"）。
+> 用 `python -m plugin.neko_plugin_cli` 代替 `neko-plugin` 就能确定性地走当前这棵树（cwd 在哪儿都无所谓，
+> 已实测两边都能出 meta）。
+
 Windows PowerShell 下这样带环境变量：
 
 ```powershell
 $env:PYTHONDONTWRITEBYTECODE = "1"
 uv run neko-plugin build "../plugins/free_web_search"
 ```
+
+> 本仓库独立检出在别处时（例如与 `N.E.K.O` 同级的 `n.e.k.o_plugin_Better_web_search`），把路径参数
+> 换成那个目录名即可，"在宿主根目录执行"这一条不能变。
 
 > **为什么要加 `PYTHONDONTWRITEBYTECODE=1`**：`neko-plugin build` 会 import 插件来探测它的 entry 元数据，这一步在源码目录生成 `__pycache__/*.pyc`，而这些字节码会跟着进最终的分发包（实测约 22 KB→53 KB 的差距全在这里）。因为探测发生在打包之前，**先清理源码目录再构建是没用的**，字节码会被重新生成。插件的 `pyproject.toml` 里已声明 `[tool.neko.build] exclude_dirs`，但压缩步骤不读该规则，所以只能靠这个环境变量绕过。这是 `neko_plugin_cli` 的通病，所有插件都会碰到；上游的修法是构建时设 `sys.dont_write_bytecode = True`，以及让压缩步骤复用 `build_rules.should_skip_path()`。
 

@@ -48,6 +48,17 @@
 - `ui/` 没有测试框架，新增静态校验：`panel.tsx` 里每个 `t("…")` 文案键必须同时存在于
   `i18n/zh-CN.json` 与 `en.json`，且两份语言的键集一致。
 
+### 打包
+
+- **`neko-plugin` 命令入口可能解析到另一份旧宿主检出**（本机实测：`F:\ai\N.E.K.O`），那份 CLI 还没有
+  entry 元数据探测步骤，于是 `build` 照样打 `[OK]`、**不给任何警告**，产物里却没有 `plugin.meta.json`。
+  宿主只能退回"从 manifest 猜入口"，静态注册表得到空集；此后面板每个按钮都回
+  `UI action 'xxx' is not a plugin entry`（404）。该文案由宿主
+  `plugin/server/application/plugins/ui_query_service.py` 的 `if not entry_ids` 分支产生，
+  它判断的是"整个集合为空"，却按"你点的那个 id 不存在"的口气说话。
+  改用 `python -m plugin.neko_plugin_cli` 构建（与 cwd 无关，两边实测都能出 meta），
+  README 补了一行包内自验命令。
+
 ## v0.2.0
 
 面向"发行给别人用"的一次加固：默认配置不再依赖作者开发机上的本地代理，并把"能不能用"这件事

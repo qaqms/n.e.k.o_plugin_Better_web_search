@@ -2,7 +2,7 @@
 
 ## 未发布
 
-一轮"说的和做的对上"的修正，全部有离线单测兜底（202 → 217 个用例）。
+一轮"说的和做的对上"的修正，全部有离线单测兜底（202 → 221 个用例）。
 
 ### 修正
 
@@ -24,6 +24,18 @@
   未测显示"未测"而不是"用不了"。双测时探测数翻倍会顶穿 25 秒外层超时，因此把探测线程池按倍数放宽。
 - `_providers._is_unresolved_redirect` 里的 `lstrip("www.")` 改为 `removeprefix("www.")`
   （与同文件 `_is_engine_results_page` 一致）。此处只做后缀匹配，**无行为差异**，属一致性修正。
+- **"密钥没有写入成功：请确认宿主配置目录可写"是插件自己误判的**。宿主日志时间线显示：配置在
+  3 毫秒内就落盘了（宿主明确记录 `file_writable=True / parent_writable=True`，磁盘上也能读到
+  写进去的密钥），4.5 秒后插件才收到 `TransportError: Config persistence response timed out;
+  final persistence status is unknown` —— 丢的是**回执**不是写入。同一台宿主上另一个插件
+  （`tide_moments`）报的是同一句话，且该字符串只存在于宿主服务端，与本插件无关。
+  `_persist` 现在在异常后**回读校验**：值确实写到了就当成功，只有回读不一致才报失败，文案也不再
+  指向"目录权限"。真正该修的是宿主持久化回执通道（疑为 Windows Proactor 事件循环下
+  `zmq add_reader` 缺陷，宿主日志里本轮出现 7 次该 RuntimeWarning）。
+- **面板"复制网址"不再炸控件**：宿主面板文档的 Permissions-Policy 屏蔽了异步
+  `navigator.clipboard.writeText`（crbug.com/414348233），`useClipboard().write()` 会**抛异常**
+  而不是返回 false，于是宿主弹出"插件界面控件错误"。现在捕获后回退到
+  `document.execCommand("copy")`（不受该策略限制），两条路都不行才提示手动选中。
 
 ### 开发闭环
 

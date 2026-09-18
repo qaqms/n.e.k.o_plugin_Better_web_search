@@ -505,6 +505,73 @@ def test_no_plaintext_key_in_any_return_or_log(monkeypatch) -> None:
 # D/E. save/clear/test key round-trip (persist + self reload)
 # ---------------------------------------------------------------------------
 
+class _LostAckConfig(FakeConfig):
+    """Host behaviour captured on a Steam install: the file lands, the ack does not.
+
+    ``projectneko_server`` wrote the runtime config in 3 ms and then raised
+    ``Config persistence response timed out; final persistence status is unknown``
+    ~4.5 s later, which the plugin used to report as "配置目录不可写".
+    """
+
+    def __init__(self, data: dict, *, land: bool) -> None:
+        super().__init__(data)
+        self._land = land
+
+    async def update(self, patch, *, timeout: float = 5.0) -> dict:
+        if self._land:
+            await super().update(patch)
+        raise entries.TransportError(
+            "failed to update runtime config: Config persistence response timed out; "
+            "final persistence status is unknown")
+
+
+def _lost_ack_plugin(*, land: bool) -> FreeWebSearchPlugin:
+    data = {"search": {"backend_chain": ["exa"], "exa_api_key": ""},
+            "net": {}, "ui": {}, "host": {}}
+    plugin = make_plugin()
+    plugin.config = _LostAckConfig(data, land=land)
+    return plugin
+
+
+def test_persist_accepts_a_write_whose_acknowledgement_was_lost() -> None:
+    plugin = _lost_ack_plugin(land=True)
+    assert asyncio.run(plugin._persist({"search": {"exa_api_key": SECRET}})) is True
+    assert plugin._text("exa_api_key") == SECRET
+
+
+def test_persist_still_fails_when_the_value_never_lands() -> None:
+    plugin = _lost_ack_plugin(land=False)
+    assert asyncio.run(plugin._persist({"search": {"exa_api_key": SECRET}})) is False
+    assert plugin._text("exa_api_key") == ""
+
+
+def test_save_exa_key_reports_success_when_only_the_ack_is_lost(monkeypatch) -> None:
+    plugin = _lost_ack_plugin(land=True)
+
+    async def fake_verify(key: str):
+        assert key == SECRET
+        return True, 120, 3, "密钥可用：120 ms 返回 3 条结果", ""
+
+    monkeypatch.setattr(plugin, "_verify_exa_key", fake_verify)
+    outcome = asyncio.run(plugin.save_exa_key(key=SECRET))
+    assert outcome.is_ok() and outcome.value["ok"] is True
+    assert "没能保存" not in outcome.value["message"]
+    assert SECRET not in json.dumps(outcome.value, ensure_ascii=False)
+
+
+def test_save_exa_key_still_says_no_when_the_write_really_failed(monkeypatch) -> None:
+    plugin = _lost_ack_plugin(land=False)
+
+    async def fake_verify(key: str):
+        return True, 120, 3, "密钥可用", ""
+
+    monkeypatch.setattr(plugin, "_verify_exa_key", fake_verify)
+    outcome = asyncio.run(plugin.save_exa_key(key=SECRET))
+    assert outcome.is_ok()                        # the search itself still works
+    assert outcome.value["ok"] is False           # but the key is not stored
+    assert "没能保存" in outcome.value["message"]
+
+
 def test_save_exa_key_persists_reloads_and_reports_masked(monkeypatch) -> None:
     def good(query, limit, *, timeout, policy, proxy_url, live_crawl=False,
              api_key="", tool="auto"):

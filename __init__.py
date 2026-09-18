@@ -443,13 +443,40 @@ class FreeWebSearchPlugin(NekoPluginBase):
         try:
             await self.config.update(payload)
         except Exception as error:
-            self.logger.info("config update failed: {}:{}", type(error).__name__, error)
-            return False
+            # Seen in the wild on Windows: the host writes the file within a few
+            # milliseconds and then loses the acknowledgement, raising
+            # "Config persistence response timed out; final persistence status is
+            # unknown". The raise therefore cannot mean "not written" -- reading
+            # the value back is the only way to tell the two cases apart.
+            self.logger.info("config update raised {}:{}", type(error).__name__, error)
+            if not await self._verify_persisted(payload):
+                return False
+            self.logger.info("config did persist; only the acknowledgement was lost")
         try:
             await self._load_sections()
             self._coordinators.clear()
         except Exception:
             self.logger.exception("config reload failed")
+        return True
+
+    async def _verify_persisted(self, payload: Dict[str, Any]) -> bool:
+        """True when every key in ``payload`` now reads back from the host."""
+        patched: List[tuple[str, str, Any]] = []
+        for section, values in (payload or {}).items():
+            if isinstance(values, dict):
+                patched.extend((str(section), str(key), value) for key, value in values.items())
+        if not patched:
+            return False
+        try:
+            await self._load_sections()
+        except Exception as error:
+            self.logger.info("config read-back failed: {}:{}", type(error).__name__, error)
+            return False
+        for section, key, expected in patched:
+            table = self._section(section)
+            if key not in table or table[key] != expected:
+                return False
+        self._coordinators.clear()
         return True
 
     # ------------------------------------------------------------------
@@ -940,7 +967,7 @@ class FreeWebSearchPlugin(NekoPluginBase):
         ok, ms, count, message, kind = await self._verify_exa_key(text)
         self._apply_exa_verify_state(kind if saved else "network")
         if not saved:
-            message = "密钥没有写入成功：请确认宿主配置目录可写后重试"
+            message = "密钥没能保存：宿主没有确认这次配置写入，请再点一次保存（不填密钥也能搜索）"
         return Ok({
             "ok": bool(ok and saved),
             "masked": self._mask_key(text),

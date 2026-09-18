@@ -130,6 +130,26 @@ function latencyText(value: unknown): string {
   return `${(ms / 1000).toFixed(1)} s`
 }
 
+function legacyCopy(text: string): boolean {
+  // The legacy selection copy is not gated by the Clipboard Permissions-Policy,
+  // so it is the fallback whenever the async API is blocked by the host.
+  try {
+    const area = document.createElement("textarea")
+    area.value = text
+    area.setAttribute("readonly", "")
+    area.style.position = "fixed"
+    area.style.top = "-1000px"
+    area.style.opacity = "0"
+    document.body.appendChild(area)
+    area.select()
+    const copied = document.execCommand("copy")
+    document.body.removeChild(area)
+    return copied
+  } catch {
+    return false
+  }
+}
+
 export default function FreeWebSearchPanel(props: PluginSurfaceProps<PanelState>) {
   const { actions, state, t } = props
   const toast = useToast()
@@ -229,8 +249,19 @@ export default function FreeWebSearchPanel(props: PluginSurfaceProps<PanelState>
   }
 
   async function copyRegisterUrl(): Promise<void> {
-    const copied = await clipboard.write(EXA_KEY_PAGE)
-    if (copied) toast.success(t("panel.guide.urlCopied"))
+    // Panels are rendered inside a document whose Permissions-Policy blocks the
+    // async Clipboard API (crbug.com/414348233), so clipboard.write() can reject
+    // outright instead of returning false -- an uncaught rejection shows up as a
+    // "插件界面控件错误" banner and looks like a broken plugin.
+    try {
+      if (await clipboard.write(EXA_KEY_PAGE)) {
+        toast.success(t("panel.guide.urlCopied"))
+        return
+      }
+    } catch {
+      // fall through to the selection-based copy
+    }
+    if (legacyCopy(EXA_KEY_PAGE)) toast.success(t("panel.guide.urlCopied"))
     else toast.error(t("panel.guide.copyFailed"))
   }
 

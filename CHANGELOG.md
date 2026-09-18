@@ -1,8 +1,10 @@
 # 更新记录
 
-## 未发布
+## v0.2.1（2026-09-19）
 
-一轮"说的和做的对上"的修正，全部有离线单测兜底（202 → 229 个用例）。
+一轮"说的和做的对上"的修正：把配置项、自检、开关语义、面板文案与真实行为重新对齐，并顺手把
+分发包里不该出现的东西拿掉。全部有离线单测兜底（202 → 231 个用例）。
+
 
 ### 修正
 
@@ -83,6 +85,32 @@
   它判断的是"整个集合为空"，却按"你点的那个 id 不存在"的口气说话。
   改用 `python -m plugin.neko_plugin_cli` 构建（与 cwd 无关，两边实测都能出 meta），
   README 补了一行包内自验命令。
+- **分发包瘦身：41 个文件 / 484 KB → 24 个 / 332 KB（压缩后 159 KB → 109 KB）**。v0.2.0 的包里
+  有 16 个文件、135 KB 是 `tests/fixtures/` 下 Bing/百度/DuckDuckGo 的**真实抓取页面**，另有
+  18 KB 的 `docs/plan-v0.2.md` 内部施工单——两者都是本仓库自测的输入，不是运行期需要的东西。
+  宿主默认排除表（`neko_plugin_cli/core/build_rules.py:18-39`）不含 `tests/`、`docs/`，所以在
+  `pyproject.toml` 的 `[tool.neko.build]` 里补了 `exclude_dirs = ["tests"]` 与
+  `exclude = ["docs/plan-*.md"]`。`docs/quickstart.md` **必须**留下（`[[plugin.ui.guide]]`
+  的 entry 指着它），新用例 `test_packaging_excludes_dev_payload_but_keeps_ui_files` 就是把
+  manifest 声明的 UI 文件逐个拿去套宿主自己的匹配语义来兜这条底。`tests/` 仍留在 git 仓库里
+  （宿主 `validate_cmd.py:112` 在 `--strict` 下要求 `tests/test_smoke.py` 存在），只是不再进包。
+- **上一版 README 关于 `__pycache__` 的归因是错的，结论对**。实测：不带
+  `PYTHONDONTWRITEBYTECODE=1` 构建，源码树 `__pycache__/` 里每个文件的 mtime 都不变，包里却
+  实实在在多出 8 个 `.pyc`（159 KB → 290 KB）。真正的机制是排除规则只在**复制到暂存树**那一步
+  生效（`core/build.py:342`），随后 entry 探测 import 的是**暂存副本**（构建日志里的
+  `%TEMP%\neko_build_<id>\payload\plugins\…\plugin.toml` 就是它），字节码写在暂存树里，而
+  `export_package` 直接把暂存树 zip 掉、不再套一遍规则。所以"`exclude_dirs` 写 `__pycache__`"
+  挡不住，只有那个环境变量挡得住；清理源码目录也没用，因为根本不在源码目录。
+- **Market 发布有两个硬前置**（读代码确认，本机 origin 目前过不了第一条）：仓库名必须是
+  `n.e.k.o_plugin_<plugin_id>`，否则 `release_cmd.py:230-232` 直接报 error；tag 必须等于
+  `plugin.toml` 的 `version`（`release_cmd.py:237-239`）。本仓库现在的 origin 是
+  `…/n.e.k.o_plugin_Better_web_search`，所以**打 tag 触发的 release 工作流会被名字这条拦住**；
+  改名不在本次改动范围内（要改的是 GitHub 上的仓库名，改完 `git remote set-url` 即可）。
+- 新增 `test_release_version_is_stated_once`：`plugin.toml` 与 `pyproject.toml` 的版本号必须一致，
+  且 CHANGELOG 顶端那一节必须是已定版的版本号（不许带着"未发布"发版）。宿主侧没有任何一处比对
+  这两个文件，只有 tag 与 `plugin.toml` 相比对。
+- `PANEL_ENTRY_IDS` 一直漏记 `set_ssrf_guard`（它有行为用例，但没有"面板调的 id 必须在
+  `__init__.py` 里声明成 entry"这条保护），补进列表。
 
 ### 面板（实机反馈）
 

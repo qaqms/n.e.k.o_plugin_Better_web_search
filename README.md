@@ -60,13 +60,18 @@ PYTHONDONTWRITEBYTECODE=1 uv run neko-plugin build "../plugins/free_web_search"
 # 产物：N.E.K.O/plugin/neko_plugin_cli/target/free_web_search.neko-plugin
 ```
 
-> **构建后花一秒自验包里有没有 `plugin.meta.json`：**
+> **构建后花一秒自验包**（元数据在不在 = 面板能不能用；测试夹具不该在里面）：
 >
 > ```bash
 > python -c "import zipfile,sys; n=zipfile.ZipFile(sys.argv[1]).namelist(); \
-> print('plugin.meta.json:', any('plugin.meta.json' in x for x in n) or '缺失！这份包不能让面板正常工作')" \
+> print('files:', len(n)); \
+> print('plugin.meta.json:', any('plugin.meta.json' in x for x in n) or '缺失！这份包不能让面板正常工作'); \
+> print('tests/ leaked:', any('/tests/' in x for x in n) or 'no'); \
+> print('quickstart.md:', any('docs/quickstart.md' in x for x in n) or '缺失！教程打不开')" \
 > N.E.K.O/plugin/neko_plugin_cli/target/free_web_search.neko-plugin
 > ```
+>
+> 干净的样子是 `files: 24`、`tests/ leaked: no`、`quickstart.md: True`。
 >
 > 实测过的坑：本机 `neko-plugin` 这个命令入口（venv 里的 console script）会解析到**另一份旧的宿主
 > 检出**，那份 CLI 还没有 entry 元数据探测步骤，于是构建照样 `[OK]`、**不打任何警告**，但产物里没有
@@ -85,7 +90,16 @@ uv run neko-plugin build "../plugins/free_web_search"
 > 本仓库独立检出在别处时（例如与 `N.E.K.O` 同级的 `n.e.k.o_plugin_Better_web_search`），把路径参数
 > 换成那个目录名即可，"在宿主根目录执行"这一条不能变。
 
-> **为什么要加 `PYTHONDONTWRITEBYTECODE=1`**：`neko-plugin build` 会 import 插件来探测它的 entry 元数据，这一步在源码目录生成 `__pycache__/*.pyc`，而这些字节码会跟着进最终的分发包（实测约 22 KB→53 KB 的差距全在这里）。因为探测发生在打包之前，**先清理源码目录再构建是没用的**，字节码会被重新生成。插件的 `pyproject.toml` 里已声明 `[tool.neko.build] exclude_dirs`，但压缩步骤不读该规则，所以只能靠这个环境变量绕过。这是 `neko_plugin_cli` 的通病，所有插件都会碰到；上游的修法是构建时设 `sys.dont_write_bytecode = True`，以及让压缩步骤复用 `build_rules.should_skip_path()`。
+> **为什么要加 `PYTHONDONTWRITEBYTECODE=1`**：`neko-plugin build` 会 import 插件来探测它的 entry 元数据，
+> 而探测用的是**暂存目录里的那份副本**（构建日志里能看到它在 `%TEMP%\neko_build_<插件 id>\payload\plugins\…`
+> 下读 `plugin.toml`），于是这一步写出的 `__pycache__/*.pyc` 落在暂存树里，最终跟着分发包一起被 zip。
+> 实测不带这个环境变量：包里多 8 个 `.pyc`、159 KB 变 290 KB，而**源码目录的 `__pycache__` mtime 一个都没变**
+> ——所以"先清理源码目录再构建"是无效动作，字节码压根不是写在源码目录里的。
+> `[tool.neko.build] exclude_dirs` 只在复制到暂存树那一步生效（`plugin/neko_plugin_cli/core/build.py:342`），
+> `export_package` 压缩时不再重套规则，因此对这条泄漏**无效**。上游的修法是构建时设
+> `sys.dont_write_bytecode = True`，以及让压缩步骤复用 `build_rules.should_skip_path()`。
+> 同理，本插件的分发包排除（`tests/` 与内部施工单 `docs/plan-*.md` 不进包）也是靠 `[tool.neko.build]`
+> 生效的：包里只有 24 个文件，`docs/quickstart.md` 因为在 manifest 里被声明为教程 entry 所以必须留。
 
 本插件**零第三方依赖**（只用 Python 标准库），所以没有 `vendor/`，包很小，也不会因为宿主依赖版本变动而坏掉。
 
@@ -132,13 +146,13 @@ takeover_search = false     # 在面板切"停用内置搜索"时自动置 true�
 n.e.k.o_plugin_free_web_search
 ```
 
-在本仓库根目录：
+在本仓库根目录（`neko-plugin` 换成 `python -m plugin.neko_plugin_cli` 的原因见上文那条坑注）：
 
 ```bash
 uvx ruff==0.12.4 check --ignore-noqa --config ruff.toml .
-uv run --project "../../N.E.K.O" neko-plugin check .
+uv run --project "../../N.E.K.O" python -m plugin.neko_plugin_cli check .
 # 含 lint + 测试 + 构建 + 包校验；带 NO-BYTECODE 才能得到干净的包
-PYTHONDONTWRITEBYTECODE=1 uv run --project "../../N.E.K.O" neko-plugin check -r .
+PYTHONDONTWRITEBYTECODE=1 uv run --project "../../N.E.K.O" python -m plugin.neko_plugin_cli check -r .
 ```
 
 单元测试是**离线**的（`tests/fixtures/` 里是真实响应结构，不联网）：
@@ -162,6 +176,8 @@ _host.py         宿主内置 web_search 的状态读取与双向开关（只走
 _diagnose.py     网络自检编排（纯逻辑，probe 闭包由 __init__.py 注入）
 ui/panel.tsx     面板（引导三步 / 密钥管理 / 内置搜索开关 / 自检按钮）
 docs/quickstart.md  接入教程
+tests/           离线用例 + 真实响应夹具（**不进分发包**，见 pyproject 的 [tool.neko.build]）
+docs/plan-*.md   施工单，内部文档（**不进分发包**）
 ```
 
 面板 entry（actionId，全部对宿主 30s 看门狗留了预算）：`panel_context`、`save_exa_key`、`clear_exa_key`、`test_exa_key`、`set_host_search`、`get_host_search`、`set_onboarding`、`show_guide`、`diagnose_network`、`set_ssrf_guard`。
@@ -169,10 +185,17 @@ docs/quickstart.md  接入教程
 ## 发布到 Market
 
 ```bash
-uv run --project "../../N.E.K.O" neko-plugin publish .
+uv run --project "../../N.E.K.O" python -m plugin.neko_plugin_cli publish .
 ```
 
 先在 [Market 投稿页](https://market.project-neko.cn/#/upload) 用 GitHub 仓库地址提交一次审核，通过后这条命令会打 tag、等 GitHub Release、再通知 Market。`.github/workflows/release.yml` 会构建并上传 `free_web_search.neko-plugin`，Market 独立校验该 Release 后才上架。
+
+发布前两条会**直接报 error** 的硬条件（`plugin/neko_plugin_cli/commands/release_cmd.py`）：
+
+| 条件 | 代码位置 | 本仓库现状 |
+| --- | --- | --- |
+| git origin 的仓库名必须是 `n.e.k.o_plugin_free_web_search` | `release_cmd.py:230-232` | ❌ 现在叫 `n.e.k.o_plugin_Better_web_search`，要在 GitHub 上改名后 `git remote set-url` |
+| tag 去掉 `v` 前缀后必须等于 `plugin.toml` 的 `version` | `release_cmd.py:237-239` | ✅ 发 `v0.2.1` 即可；`tests/test_smoke.py::test_release_version_is_stated_once` 保证 `plugin.toml` 与 `pyproject.toml` 不打架 |
 
 ## Entry
 

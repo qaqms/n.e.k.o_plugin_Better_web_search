@@ -1,5 +1,7 @@
+import fnmatch
 import json
 import re
+import tomllib
 from pathlib import Path
 
 PANEL_ENTRY_IDS = [
@@ -12,7 +14,39 @@ PANEL_ENTRY_IDS = [
     "set_onboarding",
     "show_guide",
     "diagnose_network",
+    "set_ssrf_guard",
 ]
+
+_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _read_toml(name: str) -> dict:
+    with (_ROOT / name).open("rb") as stream:
+        return tomllib.load(stream)
+
+
+def _host_rule_matches(rel_path: str, pattern: str) -> bool:
+    """The host's own pattern semantics (neko_plugin_cli/core/build_rules.py:153-158).
+
+    A pattern without "/" is matched against the *file name*, so ["tests",
+    "docs/plan-*.md"] and ["*.pyc"] all describe real host behaviour here
+    instead of a guess at it.
+    """
+    if fnmatch.fnmatchcase(rel_path, pattern):
+        return True
+    return "/" not in pattern and fnmatch.fnmatchcase(Path(rel_path).name, pattern)
+
+
+def _excluded_from_package(rel_path: str, rules: dict) -> bool:
+    parts = Path(rel_path).parts
+    for dir_pattern in rules.get("exclude_dirs", []):
+        if any(_host_rule_matches("/".join(parts[: i + 1]), dir_pattern) for i in range(len(parts) - 1)):
+            return True
+    for pattern in list(rules.get("exclude", [])) + list(rules.get("exclude_files", [])):
+        if _host_rule_matches(rel_path, pattern):
+            return True
+    return False
+
 
 # ui/ has no test harness of its own, so a missing copy string would only show
 # up as a raw key rendered in the panel -- these static checks are the guard.
@@ -119,3 +153,50 @@ def test_default_config_sections_present_in_example() -> None:
                 "first_run_notice_sent", "takeover_search"):
         assert key in example, f"config.example.toml missing {key}"
     assert 'backend_chain = ["exa", "anysearch", "bing", "baidu"]' in example
+
+
+def test_release_version_is_stated_once() -> None:
+    """plugin.toml and pyproject.toml must agree on the version.
+
+    Nothing else catches this: neko-plugin only compares the *git tag* against
+    plugin.toml (release_cmd.py:237-239), so a pyproject left at the previous
+    number is silent here but wrong in every pip-based view of this repo.
+    """
+    plugin_version = _read_toml("plugin.toml")["plugin"]["version"]
+    project_version = _read_toml("pyproject.toml")["project"]["version"]
+    assert plugin_version == project_version, (
+        f"plugin.toml={plugin_version} but pyproject.toml={project_version}"
+    )
+    changelog = (_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    first_heading = next((line for line in changelog.splitlines()
+                          if line.startswith("## ")), "")
+    assert first_heading.startswith("## v"), (
+        f"the release on top of the changelog is not versioned: {first_heading!r}"
+    )
+
+
+def test_packaging_excludes_dev_payload_but_keeps_ui_files() -> None:
+    """The distributed package carries the panel and the guide, nothing else.
+
+    v0.2.0 shipped 41 files / 484 KB, of which 135 KB was scraped
+    bing/baidu/duckduckgo HTML (tests/fixtures) and 18 KB an internal
+    construction plan -- both are inputs to this repo's own tests, and the
+    fixtures are other people's pages. The rules live in pyproject.toml and are
+    applied at the staging copy (build.py:253,342), which is exactly why a
+    declared UI entry that happens to sit under an excluded path would still
+    fail *here* rather than on the user's panel.
+    """
+    rules = _read_toml("pyproject.toml").get("tool", {}).get("neko", {}).get("build", {})
+    ui = _read_toml("plugin.toml")["plugin"]["ui"]
+    declared = [panel["entry"] for panel in ui.get("panel", [])]
+    declared += [guide["entry"] for guide in ui.get("guide", [])]
+    assert declared, "manifest declares no UI files"
+
+    for rel_path in declared:
+        assert (_ROOT / rel_path).is_file(), f"manifest declares missing {rel_path}"
+        assert not _excluded_from_package(rel_path, rules), f"{rel_path} must ship"
+
+    assert _excluded_from_package("tests/fixtures/bing_html.html", rules)
+    assert _excluded_from_package("docs/plan-v0.2.md", rules)
+    assert _excluded_from_package("x/__pycache__/y.pyc", rules)
+

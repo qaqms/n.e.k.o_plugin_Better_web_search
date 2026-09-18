@@ -8,6 +8,7 @@ auto_start = true
 # baidu 直连常撞“百度安全验证”（靠预热救），放最后；sogou 实测无结果，不启用。
 backend = "auto"
 backend_chain = ["exa", "anysearch", "bing", "baidu"]
+# 对话里没指定条数时用这个值（上限 15）
 max_results = 6
 timeout_seconds = 12
 total_timeout_seconds = 25
@@ -16,8 +17,11 @@ total_timeout_seconds = 25
 proxy = "auto"
 proxy_url = ""
 # 单个后端可覆盖（direct / proxy / auto）
+exa_proxy = "auto"
+anysearch_proxy = "auto"
 duckduckgo_proxy = "proxy"
 bing_proxy = "direct"
+sogou_proxy = "direct"
 baidu_proxy = "direct"
 duckduckgo_method = "POST"
 
@@ -44,14 +48,25 @@ duckduckgo_needs_proxy = true
 max_content_chars = 4000
 fetch_total_timeout_seconds = 24
 
-# 缓存与限流
+# 缓存与限流：免 Key 通道是公共资源，打太猛会被限流甚至封 IP
 cache_ttl_seconds = 300
 stale_ttl_seconds = 1800
 cache_entries = 128
 queue_wait_seconds = 2
 cooldown_seconds = 60
+# 每个后端两次请求之间的最小间隔（秒）
+exa_min_interval_seconds = 0.5
+anysearch_min_interval_seconds = 0.75
+bing_min_interval_seconds = 2
+sogou_min_interval_seconds = 3
+baidu_min_interval_seconds = 10
+duckduckgo_min_interval_seconds = 3
+searxng_min_interval_seconds = 0.5
+# 撞墙后的惩罚性冷却（秒）
 baidu_cooldown_seconds = 120
 duckduckgo_cooldown_seconds = 300
+# 网络自检用的固定查询词（只影响自检，不影响正常搜索）
+diagnose_query = "N.E.K.O 猫娘 插件"
 
 [net]
 # fetch 的 SSRF 白名单：只对“域名解析出来的结果”放行，手填 IP/localhost/

@@ -1,3 +1,5 @@
+import json
+import re
 from pathlib import Path
 
 PANEL_ENTRY_IDS = [
@@ -11,6 +13,31 @@ PANEL_ENTRY_IDS = [
     "show_guide",
     "diagnose_network",
 ]
+
+# ui/ has no test harness of its own, so a missing copy string would only show
+# up as a raw key rendered in the panel -- these static checks are the guard.
+T_KEY = re.compile(r'(?<![A-Za-z0-9_])t\("([a-zA-Z0-9_.]+)"')
+
+
+def _load_locale(locale: str) -> dict:
+    root = Path(__file__).resolve().parents[1]
+    return json.loads((root / "i18n" / f"{locale}.json").read_text(encoding="utf-8"))
+
+
+def test_every_panel_copy_key_exists_in_both_locales() -> None:
+    root = Path(__file__).resolve().parents[1]
+    tsx = (root / "ui" / "panel.tsx").read_text(encoding="utf-8")
+    used = set(T_KEY.findall(tsx))
+    assert len(used) > 40, "the extractor stopped matching t() calls"
+    for locale in ("zh-CN", "en"):
+        catalog = _load_locale(locale)
+        missing = sorted(key for key in used if key not in catalog)
+        assert not missing, f"i18n/{locale}.json missing: {missing}"
+
+
+def test_both_locales_carry_the_same_keys() -> None:
+    zh, en = _load_locale("zh-CN"), _load_locale("en")
+    assert set(zh) - set(en) == set() and set(en) - set(zh) == set()
 
 
 def test_plugin_manifest_exists() -> None:

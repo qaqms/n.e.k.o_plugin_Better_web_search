@@ -61,6 +61,7 @@ type DiagnoseView = {
 type DiagnoseRowView = {
   name: string
   direct: string
+  proxied: string
   ms: string
   note: string
 }
@@ -147,12 +148,16 @@ export default function FreeWebSearchPanel(props: PluginSurfaceProps<PanelState>
   const [notice, setNotice] = useState("")
   const [noticeIsError, setNoticeIsError] = useState(false)
   const [diagnose, setDiagnose] = useState<DiagnoseView | null>(null)
+  // "" = follow whatever the host reports as the proxy situation; otherwise the
+  // user forced dual-path on/off and we must not silently override that.
+  const [dualPathDraft, setDualPathDraft] = useState("")
 
   const stage = localStage || stageOf(safeState.onboarding_stage)
   const maskedKey = asString(safeState.exa_key_masked, "")
   const keyState = asString(safeState.exa_key_state, "unknown").toLowerCase()
   const lastError = asString(safeState.exa_last_error, "")
   const proxyDetected = asBool(safeState.proxy_detected, false)
+  const withProxy = dualPathDraft === "" ? proxyDetected : dualPathDraft === "on"
   const fullChain = asList(safeState.effective_chain).length ? asList(safeState.effective_chain) : asList(safeState.chain)
   const shownChain = proxyDetected ? fullChain : fullChain.filter((item) => item.toLowerCase() !== "duckduckgo")
   const quotaNote = asString(safeState.quota_note, t("panel.quota.fallback"))
@@ -334,30 +339,40 @@ export default function FreeWebSearchPanel(props: PluginSurfaceProps<PanelState>
     await refreshContext()
   }
 
+  function diagStatus(value: unknown): string {
+    if (typeof value === "boolean") return value ? t("panel.diag.ok") : t("panel.diag.fail")
+    // The backend leaves a column empty ("") when that path was not attempted,
+    // which is not the same statement as "this path failed".
+    if (typeof value === "string") return value.trim() || t("panel.diag.skipped")
+    return "-"
+  }
+
   function toDiagnoseRows(value: unknown): DiagnoseRowView[] {
     if (!Array.isArray(value)) return []
     const rows: DiagnoseRowView[] = []
     for (const item of value) {
       if (typeof item === "string") {
-        rows.push({ name: item, direct: "-", ms: "-", note: "-" })
+        rows.push({ name: item, direct: "-", proxied: "-", ms: "-", note: "-" })
         continue
       }
       if (!item || typeof item !== "object") continue
       const record = item as ActionRecord
       const name = asString(record.backend, asString(record.name, asString(record.source, "-")))
-      const directValue = record.direct
-      let direct = "-"
-      if (typeof directValue === "boolean") direct = directValue ? t("panel.diag.ok") : t("panel.diag.fail")
-      else if (typeof directValue === "string" && directValue.trim()) direct = directValue.trim()
       const noteValue = asString(record.note, asString(record.message, "-"))
-      rows.push({ name, direct, ms: latencyText(record.ms) || "-", note: noteValue })
+      rows.push({
+        name,
+        direct: diagStatus(record.direct),
+        proxied: diagStatus(record.proxied),
+        ms: latencyText(record.ms) || "-",
+        note: noteValue,
+      })
     }
     return rows
   }
 
   async function runDiagnose(): Promise<void> {
     setDiagnose(null)
-    const result = await runAction("diagnose_network", { with_proxy: false }, "diagnose", 90000)
+    const result = await runAction("diagnose_network", { with_proxy: withProxy }, "diagnose", 90000)
     if (!result) return
     const ok = resultOk(result)
     const summary = resultMessage(result) || t("panel.diag.emptyResult")
@@ -591,6 +606,13 @@ export default function FreeWebSearchPanel(props: PluginSurfaceProps<PanelState>
         <Stack>
           <Text>{t("panel.diag.help")}</Text>
           <Alert tone="warning">{t("panel.diag.cost")}</Alert>
+          <Switch
+            checked={withProxy}
+            label={t("panel.diag.dual")}
+            disabled={busy("diagnose")}
+            onChange={(value) => setDualPathDraft(value ? "on" : "off")}
+          />
+          <Tip>{dualPathDraft === "" ? t("panel.diag.dualAuto", { state: proxyDetected ? t("panel.diag.on") : t("panel.diag.off") }) : t("panel.diag.dualHelp")}</Tip>
           <Inline gap={3} wrap>
             <Button tone="primary" disabled={busy("diagnose") || !canCall("diagnose_network")} onClick={runDiagnose}>
               {label("diagnose", "panel.actions.runDiagnose")}
@@ -608,6 +630,7 @@ export default function FreeWebSearchPanel(props: PluginSurfaceProps<PanelState>
                   columns={[
                     { key: "name", label: t("panel.diag.column.name") },
                     { key: "direct", label: t("panel.diag.column.direct") },
+                    { key: "proxied", label: t("panel.diag.column.proxied") },
                     { key: "ms", label: t("panel.diag.column.ms") },
                     { key: "note", label: t("panel.diag.column.note") },
                   ]}

@@ -43,7 +43,7 @@
 
 `fetch` 带 SSRF 防护：`localhost`、`127.0.0.1`、`192.168.x.x`、`169.254.169.254`（云元数据地址）、`*.local`、以及解析到内网的域名、`javascript:` / `ftp:` 之类协议，全部拒绝。唯一例外是 `[net] ssrf_allow_ranges`（默认 `198.18.0.0/15`）：兼容 TUN + fake-ip 代理把外网域名解析成假 IP 的情况，且**只对域名解析结果放行**——直接把 IP 填进链接照样拒绝。
 
-面板里还有：接入教程（注册 → 粘贴 → 立即测试三步 + 「先体验」按钮）、「停用宿主内置网络搜索」双向开关（避免两个搜索插件抢活）、**「代理软件兼容」开关**（Clash/mihomo 的 TUN + fake-ip 模式下面板一键切，不需要你懂 CIDR）、网络自检（直连/代理双测，给出推荐链路）。
+面板里还有：接入教程（注册 → 粘贴 → 立即测试三步 + 「先体验」按钮）、「停用宿主内置网络搜索」双向开关（避免两个搜索插件抢活）、**「代理软件兼容」开关**（Clash/mihomo 的 TUN + fake-ip 模式下面板一键切，不需要你懂 CIDR）、网络自检（默认跟随检测到的代理决定是否**直连/代理双测**，也可手动固定；双测会把探测次数翻倍，结果表格里"走代理能不能用"单独一列，未测不等于用不了）。
 
 ## 装到自己的 N.E.K.O 上
 
@@ -121,8 +121,10 @@ PYTHONDONTWRITEBYTECODE=1 uv run --project "../../N.E.K.O" neko-plugin check -r 
 单元测试是**离线**的（`tests/fixtures/` 里是真实响应结构，不联网）：
 
 ```bash
-uv run --project "../../N.E.K.O" python -m pytest tests -q
+uv run --project "../../N.E.K.O" python -m pytest -c tests/pytest.ini tests -q
 ```
+
+> `-c tests/pytest.ini` 不能省：本仓库根目录就是插件包（有 `__init__.py`），pytest 8/9 会为 rootdir 到用例之间的每层目录建 Package 节点并去 import 根 `__init__.py`，而插件独立检出时它无法作为包被导入，202 个用例会在 setup 阶段全量 CollectError。把 rootdir 收进 `tests/` 就没这个节点（与宿主 `plugin/tests/pytest.ini` 同一约定）。
 
 结构：
 

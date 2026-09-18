@@ -236,6 +236,19 @@ class FreeWebSearchPlugin(NekoPluginBase):
                 ordered.append(name)
         return ordered or list(DEFAULT_CHAIN)
 
+    def _ordered_chain(self) -> List[str]:
+        """Configured chain with the preferred backend promoted to first place.
+
+        ``[search] backend`` is a *preference*, not a lock: a user who picks bing
+        still gets a result when bing is rate-limited. Locking to one engine is
+        the per-call ``backend`` argument's job (see _search_with_fallback).
+        """
+        chain = self._chain()
+        preferred = self._text("backend", "auto").lower()
+        if preferred in chain:
+            return [preferred] + [name for name in chain if name != preferred]
+        return chain
+
     def _route_policy(self, route: str) -> tuple[str, str]:
         """Return ``(policy, proxy_url)`` for one backend route.
 
@@ -320,15 +333,8 @@ class FreeWebSearchPlugin(NekoPluginBase):
         await self._load_sections()
         self._coordinators.clear()
 
-        configured = self._text("backend", "auto").lower()
-        chain = self._chain()
-        if configured in {"auto", ""}:
-            order = chain
-        elif configured in chain:
-            order = [configured] + [name for name in chain if name != configured]
-        else:
-            order = chain
-        effective = [name for name in order if self._available(name)]
+        order = self._ordered_chain()
+        effective = self._effective_chain()
 
         proxies_present = _net.system_proxy_present()
         # Bools only: never log the Exa key itself, its presence is what matters
@@ -548,7 +554,7 @@ class FreeWebSearchPlugin(NekoPluginBase):
         return True
 
     def _effective_chain(self) -> List[str]:
-        return [name for name in self._chain() if self._available(name)]
+        return [name for name in self._ordered_chain() if self._available(name)]
 
     def _unconfigured_message(self, name: str) -> str:
         if name == "searxng":
@@ -557,9 +563,11 @@ class FreeWebSearchPlugin(NekoPluginBase):
 
     async def _search_with_fallback(self, query: str, limit: int,
                                     backend: str) -> Dict[str, Any]:
-        configured = self._text("backend", "auto").lower()
         chain = self._effective_chain()
-        forced = (backend or configured or "auto").strip().lower()
+        # Only the per-call argument locks an engine. ``[search] backend`` is a
+        # preference and is already folded into ``chain`` by _ordered_chain();
+        # reading it again here would turn "prefer bing" into "bing or nothing".
+        forced = (backend or "").strip().lower()
         if forced in {"auto", ""}:
             order = chain
             allow_fallback = True
@@ -647,8 +655,8 @@ class FreeWebSearchPlugin(NekoPluginBase):
             "properties": {
                 "query": {"type": "string",
                           "description": "搜索关键词（保留用户原始语言，不要翻译）"},
-                "max_results": {"type": "integer", "description": "返回条数，默认 6，最多 15",
-                               "default": 6},
+                "max_results": {"type": "integer",
+                               "description": "返回条数；不填则用插件设置里的 max_results（默认 6），最多 15"},
                 "backend": {"type": "string",
                             "enum": ["auto", "exa", "anysearch", "bing", "sogou", "baidu",
                                      "duckduckgo", "searxng"],
@@ -658,13 +666,19 @@ class FreeWebSearchPlugin(NekoPluginBase):
             "required": ["query"],
         },
     )
-    async def search(self, query: str, max_results: int = 6, backend: str = "auto", **_):
+    async def search(self, query: str, max_results: Optional[int] = None,
+                     backend: str = "auto", **_):
         text = _parsing.collapse(query)
         if len(text) < 2:
             return Err(SdkError("搜索关键词太短"))
+        # The host passes through whatever the model supplied, so an omitted
+        # optional argument arrives as None and the user's configured default
+        # applies; the schema deliberately carries no literal default for that
+        # reason.
+        wanted = max_results if max_results is not None else self._int("max_results", 6, 1, 15)
         # The host's entry wrapper maps a bad-argument ValueError to an entry
         # error, same contract as the accepted v0.1 code.
-        limit = max(1, min(int(max_results or 6), 15))  # pi-lens-ignore: unchecked-throwing-call-python
+        limit = max(1, min(int(wanted or 6), 15))  # pi-lens-ignore: unchecked-throwing-call-python
         self.logger.info("search: query_len={} limit={} backend={}", len(text), limit,
                          backend or "auto")
         try:
@@ -804,7 +818,7 @@ class FreeWebSearchPlugin(NekoPluginBase):
     def _build_panel_context(self, host_search: Dict[str, Any]) -> Dict[str, Any]:
         """Pure context builder (structure frozen by plan §3, keys masked)."""
         key = self._text("exa_api_key")
-        chain = self._chain()
+        chain = self._ordered_chain()
         return {
             "onboarding_stage": self._text_in("ui", "onboarding_stage"),
             "exa_key_masked": self._mask_key(key),
@@ -812,7 +826,7 @@ class FreeWebSearchPlugin(NekoPluginBase):
             "exa_key_state": self._key_state,
             "exa_last_error": self._exa_last_error,
             "chain": chain,
-            "effective_chain": [name for name in chain if self._available(name)],
+            "effective_chain": self._effective_chain(),
             "proxy_mode": self._text("proxy", "auto"),
             "proxy_detected": self._proxy_available(),
             "host_search": {
@@ -1133,13 +1147,17 @@ class FreeWebSearchPlugin(NekoPluginBase):
                        for name in probe_names}
         try:
             # run() spawns its own worker pool: to_thread keeps it off our loop.
+            # Dual-path mode doubles the probe count (up to 8 backends x 2), which
+            # 4 workers cannot drain inside the 25 s envelope -- 7 s x 4 waves
+            # already hits it -- so widen the pool to keep pace with the request.
+            workers = _diagnose.MAX_WORKERS * (2 if proxied else 1)
             report = await asyncio.wait_for(
                 asyncio.to_thread(
                     _diagnose.run,
                     probes,
                     allow_proxy=bool(with_proxy),
                     per_probe_timeout=7.0,
-                    max_workers=_diagnose.MAX_WORKERS,
+                    max_workers=workers,
                     proxy_detected=self._proxy_available(),
                     proxied_probes=proxied,
                 ),

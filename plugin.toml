@@ -59,6 +59,7 @@ permissions = ["state:read"]
 # ---------------------------------------------------------------------------
 backend = "auto"
 backend_chain = ["exa", "anysearch", "bing", "baidu"]
+# 对话里没指定条数时用这个值（上限 15）
 max_results = 6
 timeout_seconds = 12
 # 所有回退都要在宿主 30 秒看门狗内跑完。
@@ -111,6 +112,32 @@ baidu_warmup = true
 # 没检测到任何代理时，duckduckgo 不进实际链路（直连只会白白耗掉几秒）
 duckduckgo_needs_proxy = true
 
+# ---------------------------------------------------------------------------
+# 正文抓取
+# ---------------------------------------------------------------------------
+max_content_chars = 4000
+fetch_total_timeout_seconds = 24
+
+# ---------------------------------------------------------------------------
+# 缓存与限流：免 Key 通道是公共资源，打太猛会被限流甚至封 IP
+# ---------------------------------------------------------------------------
+cache_ttl_seconds = 300
+stale_ttl_seconds = 1800
+cache_entries = 128
+queue_wait_seconds = 2
+cooldown_seconds = 60
+exa_min_interval_seconds = 0.5
+anysearch_min_interval_seconds = 0.75
+bing_min_interval_seconds = 2
+sogou_min_interval_seconds = 3
+baidu_min_interval_seconds = 10
+duckduckgo_min_interval_seconds = 3
+searxng_min_interval_seconds = 0.5
+baidu_cooldown_seconds = 120
+duckduckgo_cooldown_seconds = 300
+# 网络自检用的固定查询词（只影响自检，不影响正常搜索）
+diagnose_query = "N.E.K.O 猫娘 插件"
+
 [net]
 # ---------------------------------------------------------------------------
 # 安全：fetch 链接的 SSRF 防护默认拒绝一切内网地址。
@@ -135,27 +162,3 @@ first_run_notice_sent = false
 # 『网络搜索』（失败只记日志，绝不影响启动）。在面板里切换即可，不必手改。
 # ---------------------------------------------------------------------------
 takeover_search = false
-
-# ---------------------------------------------------------------------------
-# 正文抓取
-# ---------------------------------------------------------------------------
-max_content_chars = 4000
-fetch_total_timeout_seconds = 24
-
-# ---------------------------------------------------------------------------
-# 缓存与限流：免 Key 通道是公共资源，打太猛会被限流甚至封 IP
-# ---------------------------------------------------------------------------
-cache_ttl_seconds = 300
-stale_ttl_seconds = 1800
-cache_entries = 128
-queue_wait_seconds = 2
-cooldown_seconds = 60
-exa_min_interval_seconds = 0.5
-anysearch_min_interval_seconds = 0.75
-bing_min_interval_seconds = 2
-sogou_min_interval_seconds = 3
-baidu_min_interval_seconds = 10
-duckduckgo_min_interval_seconds = 3
-searxng_min_interval_seconds = 0.5
-baidu_cooldown_seconds = 120
-duckduckgo_cooldown_seconds = 300

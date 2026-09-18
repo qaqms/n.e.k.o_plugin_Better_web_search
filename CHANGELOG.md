@@ -1,5 +1,41 @@
 # 更新记录
 
+## 未发布
+
+一轮"说的和做的对上"的修正，全部有离线单测兜底（202 → 217 个用例）。
+
+### 修正
+
+- **16 个配置项从来没生效过**：`plugin.toml` 在 `[host]` 段之后没有再开新段头，导致
+  `max_content_chars`、`fetch_total_timeout_seconds`、`cache_ttl_seconds`、7 个
+  `*_min_interval_seconds` 等一并落在 `[host]` 下，而代码只从 `[search]` 读——改这些值
+  等于没改。现已归位，并新增 `tests/test_config_keys.py`：直接从 `__init__.py` 反推读取清单，
+  双向断言"读的键必须声明在对应段、声明的键必须真被读"，两份 TOML 的键集也必须一致。
+- **`[search] backend` 偏好后端**：`search()` 恒传 `"auto"`，`forced = backend or configured or
+  "auto"` 永远在第一个值上短路，配置里的偏好后端从未参与执行，只是让上报的链路顺序看起来变了。
+  现在提出 `_ordered_chain()` 由 startup / 面板上下文 / 执行路径共用；语义定为**配置=偏好**
+  （提到链首、仍自动回退），**对话里显式指定的 backend=锁死**（不回退，避免张冠李戴的引用）。
+- **`[search] max_results` 接线**：原本两份 TOML 都声明、代码从不读（真实默认是入口签名里的
+  字面量 6）。现在不指定条数时用配置值，并按 1..15 收敛；入口 schema 去掉字面量默认，避免宿主
+  替用户填回 6 而再次吞掉配置。
+- **网络自检真的做直连/代理双测**：后端 `diagnose_network(with_proxy=true)` 一直是完整的，但面板
+  恒传 `false` 且表格只有 4 列，`proxied` 那一列从未被渲染——README 承诺的"直连/代理双测"实际
+  只有单测。面板现在按检测到的代理情况默认决定是否双测（可手动固定），表格加"走代理能不能用"列，
+  未测显示"未测"而不是"用不了"。双测时探测数翻倍会顶穿 25 秒外层超时，因此把探测线程池按倍数放宽。
+- `_providers._is_unresolved_redirect` 里的 `lstrip("www.")` 改为 `removeprefix("www.")`
+  （与同文件 `_is_engine_results_page` 一致）。此处只做后缀匹配，**无行为差异**，属一致性修正。
+
+### 开发闭环
+
+- 独立检出本仓库时 `pytest tests` 会 202 个用例全量 CollectError：仓库根目录就是插件包
+  （有 `__init__.py`），pytest 会为 rootdir 到用例之间的每层目录建 Package 节点并去 import 它。
+  新增 `tests/pytest.ini` 把 rootdir 收进 `tests/`（与宿主 `plugin/tests/pytest.ini` 同一约定），
+  README 的命令相应更新。
+- `diagnose_network` 入口原本零覆盖（`_diagnose.py` 有 33 个纯逻辑测试，但入口侧的双测参数、
+  探测集合与线程池都没测到），补 3 个用例。
+- `ui/` 没有测试框架，新增静态校验：`panel.tsx` 里每个 `t("…")` 文案键必须同时存在于
+  `i18n/zh-CN.json` 与 `en.json`，且两份语言的键集一致。
+
 ## v0.2.0
 
 面向"发行给别人用"的一次加固：默认配置不再依赖作者开发机上的本地代理，并把"能不能用"这件事

@@ -670,7 +670,7 @@ def _is_unresolved_redirect(url: str) -> bool:
         parsed = urllib.parse.urlsplit(url)
     except ValueError:
         return True
-    host = (parsed.hostname or "").casefold().lstrip("www.")
+    host = (parsed.hostname or "").casefold().removeprefix("www.")
     path = parsed.path.casefold()
     if host.endswith("duckduckgo.com") and path.startswith("/l/"):
         return True

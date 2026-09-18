@@ -169,6 +169,170 @@ def test_forced_duckduckgo_without_proxy_explains_itself(monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
+# C2. [search] backend is a preference; the per-call argument is the lock
+# ---------------------------------------------------------------------------
+
+def _stub_backends(plugin, monkeypatch, failing: set[str], attempted: list[str]) -> None:
+    async def fake(name: str, query: str, limit: int, budget: float) -> dict:
+        attempted.append(name)
+        if name in failing:
+            raise resilience.BlockedError("验证页")
+        return {"results": exa_results(), "backend": name}
+
+    monkeypatch.setattr(plugin, "_search_once", fake)
+
+
+def test_configured_backend_is_promoted_in_the_reported_chain(monkeypatch) -> None:
+    monkeypatch.setattr(net, "system_proxy_present", lambda: False)
+    plugin = make_plugin({"backend": "bing",
+                          "backend_chain": ["exa", "anysearch", "bing", "baidu"]})
+    assert plugin._ordered_chain() == ["bing", "exa", "anysearch", "baidu"]
+    assert plugin._effective_chain() == ["bing", "exa", "anysearch", "baidu"]
+
+
+def test_configured_backend_keeps_falling_back(monkeypatch) -> None:
+    """The status card may not promise an order the runtime does not run."""
+    attempted: list[str] = []
+    plugin = make_plugin({"backend": "bing", "backend_chain": ["bing", "exa"]})
+    _stub_backends(plugin, monkeypatch, {"bing"}, attempted)
+    outcome = asyncio.run(plugin._search_with_fallback("猫娘计划", 3, "auto"))
+    assert attempted == ["bing", "exa"]
+    assert outcome["backend"] == "exa"
+    assert outcome["attempted"] == ["bing", "exa"]
+
+
+def test_per_call_backend_still_locks_and_does_not_fall_back(monkeypatch) -> None:
+    attempted: list[str] = []
+    plugin = make_plugin({"backend": "auto", "backend_chain": ["bing", "exa"]})
+    _stub_backends(plugin, monkeypatch, {"bing"}, attempted)
+    with pytest.raises(resilience.BlockedError):
+        asyncio.run(plugin._search_with_fallback("猫娘计划", 3, "bing"))
+    assert attempted == ["bing"]
+
+
+def test_startup_report_matches_the_order_the_runtime_uses(monkeypatch) -> None:
+    monkeypatch.setattr(net, "system_proxy_present", lambda: False)
+    plugin = make_plugin({"backend": "baidu", "backend_chain": ["exa", "anysearch", "baidu"]})
+    outcome = asyncio.run(plugin.startup())
+    payload = outcome.value if outcome.is_ok() else {}
+    assert payload["chain"] == ["baidu", "exa", "anysearch"]
+    assert payload["effective_chain"] == ["baidu", "exa", "anysearch"]
+
+
+# ---------------------------------------------------------------------------
+# C3. [search] max_results is the default the entry falls back to
+# ---------------------------------------------------------------------------
+
+def _capture_limit(plugin, monkeypatch) -> dict:
+    seen: dict = {}
+
+    async def fake(query: str, limit: int, backend: str) -> dict:
+        seen["limit"] = limit
+        return {"results": exa_results(), "backend": "exa"}
+
+    monkeypatch.setattr(plugin, "_search_with_fallback", fake)
+    return seen
+
+
+def test_max_results_config_drives_the_default_limit(monkeypatch) -> None:
+    plugin = make_plugin({"max_results": 9, "backend_chain": ["exa"]})
+    seen = _capture_limit(plugin, monkeypatch)
+    assert asyncio.run(plugin.search(query="猫娘计划")).is_ok()
+    assert seen["limit"] == 9
+
+
+def test_explicit_max_results_beats_the_configured_default(monkeypatch) -> None:
+    plugin = make_plugin({"max_results": 9, "backend_chain": ["exa"]})
+    seen = _capture_limit(plugin, monkeypatch)
+    asyncio.run(plugin.search(query="猫娘计划", max_results=2))
+    assert seen["limit"] == 2
+
+
+def test_configured_max_results_is_clamped_like_the_argument(monkeypatch) -> None:
+    plugin = make_plugin({"max_results": 999, "backend_chain": ["exa"]})
+    seen = _capture_limit(plugin, monkeypatch)
+    asyncio.run(plugin.search(query="猫娘计划"))
+    assert seen["limit"] == 15
+
+
+# ---------------------------------------------------------------------------
+# C4. diagnose_network: the dual-path the panel asks for must really run
+# ---------------------------------------------------------------------------
+
+def _row_by_backend(rows: list[dict]) -> dict:
+    return {str(row.get("backend")): row for row in rows}
+
+
+def _stub_probes(plugin, monkeypatch, reachable: set[tuple[str, bool]]) -> list[tuple[str, bool]]:
+    built: list[tuple[str, bool]] = []
+
+    def fake_probe(name: str, query: str, limit: int, timeout: float, *,
+                   force_proxy: bool):
+        built.append((name, force_proxy))
+
+        def probe() -> list[dict]:
+            if (name, force_proxy) not in reachable:
+                raise net.NetworkError("no route")
+            return [{"title": "T", "url": "https://example.com/a", "snippet": "s"}]
+
+        return probe
+
+    monkeypatch.setattr(plugin, "_probe", fake_probe)
+    return built
+
+
+def test_single_path_self_check_marks_the_proxy_column_as_not_attempted(monkeypatch) -> None:
+    plugin = make_plugin({"backend_chain": ["exa", "bing"]})
+    built = _stub_probes(plugin, monkeypatch, {("exa", False), ("bing", False)})
+    outcome = asyncio.run(plugin.diagnose_network())
+    assert outcome.is_ok()
+    assert all(force is False for _name, force in built)
+    rows = _row_by_backend(outcome.value["rows"])
+    assert rows["exa"]["direct"] == "ok" and rows["exa"]["proxied"] == ""
+    # duckduckgo is always probed: "why not DDG?" is the first thing users ask.
+    assert "duckduckgo" in rows
+
+
+def test_dual_path_self_check_probes_both_ways_and_names_the_proxy_only_engine(monkeypatch) -> None:
+    plugin = make_plugin({"backend_chain": ["exa", "bing"]})
+    built = _stub_probes(plugin, monkeypatch, {("exa", False), ("bing", True)})
+    outcome = asyncio.run(plugin.diagnose_network(with_proxy=True))
+    assert sorted(built) == [("bing", False), ("bing", True),
+                             ("duckduckgo", False), ("duckduckgo", True),
+                             ("exa", False), ("exa", True)]
+    rows = _row_by_backend(outcome.value["rows"])
+    assert rows["bing"]["direct"] != "ok" and rows["bing"]["proxied"] == "ok"
+    assert "代理" in rows["bing"]["note"]
+    assert "bing" in outcome.value["recommended_chain"]
+    # Without a proxy path duckduckgo fails both ways, so it stays out of the advice.
+    assert "duckduckgo" not in outcome.value["recommended_chain"]
+
+
+def test_dual_path_self_check_doubles_the_probe_pool(monkeypatch) -> None:
+    """8 backends x 2 paths at 7 s each cannot drain through 4 workers in 25 s."""
+    seen: dict = {}
+
+    def fake_run(probes, **kwargs) -> dict:
+        seen.update(kwargs)
+        return {"rows": [], "summary": "ok", "recommended_chain": []}
+
+    monkeypatch.setattr(entries._diagnose, "run", fake_run)
+    plugin = make_plugin({"backend_chain": ["exa", "bing", "baidu"]})
+    monkeypatch.setattr(plugin, "_probe", lambda *a, **k: (lambda: []))
+
+    asyncio.run(plugin.diagnose_network(with_proxy=True))
+    assert seen["allow_proxy"] is True
+    assert seen["max_workers"] == entries._diagnose.MAX_WORKERS * 2
+    # chain + duckduckgo, each with its own proxy-path closure
+    assert len(seen["proxied_probes"]) == 4
+
+    asyncio.run(plugin.diagnose_network())
+    assert seen["allow_proxy"] is False
+    assert seen["max_workers"] == entries._diagnose.MAX_WORKERS
+    assert seen["proxied_probes"] is None
+
+
+# ---------------------------------------------------------------------------
 # D. masking + key fallback (retry exactly once)
 # ---------------------------------------------------------------------------
 

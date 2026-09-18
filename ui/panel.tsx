@@ -48,6 +48,8 @@ type PanelState = {
   proxy_mode?: string
   proxy_detected?: boolean
   host_search?: HostSearchState
+  takeover?: boolean
+  takeover_error?: string
   ssrf_fake_ip?: boolean
   quota_note?: string
 }
@@ -201,6 +203,12 @@ export default function FreeWebSearchPanel(props: PluginSurfaceProps<PanelState>
   const hostExists = asBool(hostSearch.exists, true)
   const hostRunning = asBool(hostSearch.running, false)
   const hostToggleable = asBool(hostSearch.toggleable, false)
+  // The switch reflects what the user asked for; the badge reflects reality. They
+  // can disagree when the host is too slow to honour the stop -- say so instead
+  // of letting the user click the switch again to "confirm".
+  const takeover = asBool(safeState.takeover, false)
+  const takeoverError = asString(safeState.takeover_error, "")
+  const takeoverMismatch = takeover && hostRunning
   const ssrfFakeIpKnown = typeof safeState.ssrf_fake_ip === "boolean"
   const ssrfFakeIp = asBool(safeState.ssrf_fake_ip, false)
   const proxyMode = asString(safeState.proxy_mode, "-")
@@ -625,7 +633,7 @@ export default function FreeWebSearchPanel(props: PluginSurfaceProps<PanelState>
         <Stack>
           <Inline gap={3} wrap align="center" justify="space-between">
             <Switch
-              checked={hostKnown && !hostRunning}
+              checked={takeover}
               label={t("panel.host.label")}
               disabled={hostDisabled}
               onChange={(value) => toggleHostSearch(!value)}
@@ -636,7 +644,14 @@ export default function FreeWebSearchPanel(props: PluginSurfaceProps<PanelState>
             />
           </Inline>
           <Text>{hint}</Text>
+          {takeoverMismatch ? <Alert tone="warning">{t("panel.host.mismatch")}</Alert> : null}
+          {takeoverError ? <Text>{t("panel.host.lastError", { detail: takeoverError })}</Text> : null}
           <Inline gap={3} wrap>
+            {takeoverMismatch ? (
+              <Button tone="danger" disabled={busy("host") || !canCall("set_host_search")} onClick={() => toggleHostSearch(false)}>
+                {label("host", "panel.actions.retryStop")}
+              </Button>
+            ) : null}
             <Button tone="default" disabled={busy("hostcheck") || !canCall("get_host_search")} onClick={checkHostSearch}>
               {label("hostcheck", "panel.actions.checkHost")}
             </Button>

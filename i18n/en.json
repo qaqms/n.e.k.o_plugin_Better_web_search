@@ -39,6 +39,7 @@
   "panel.actions.showGuide": "Show guide again",
   "panel.actions.configureKey": "Set up a key",
   "panel.actions.checkHost": "Check again",
+  "panel.actions.retryStop": "Stop it again",
   "panel.actions.runDiagnose": "Run the check",
   "panel.actions.refresh": "Refresh panel",
 
@@ -91,6 +92,8 @@
   "panel.host.stateRunning": "Running",
   "panel.host.stateStopped": "Stopped",
   "panel.host.stateUnknown": "State unavailable",
+  "panel.host.mismatch": "You asked this plugin to take over, but the built-in search is still running — the last stop did not take (usually the host management API answered too slowly). Press \"Stop it again\" below; do not flip the switch above.",
+  "panel.host.lastError": "Last stop attempt reported: {detail}",
 
   "panel.diag.title": "Network check",
   "panel.diag.help": "Tries each search source one by one and tells you what works directly and how long it takes.",

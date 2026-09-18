@@ -39,6 +39,7 @@
   "panel.actions.showGuide": "重新引导",
   "panel.actions.configureKey": "去配置密钥",
   "panel.actions.checkHost": "重新检查",
+  "panel.actions.retryStop": "重新停用",
   "panel.actions.runDiagnose": "开始自检",
   "panel.actions.refresh": "刷新面板",
 
@@ -91,6 +92,8 @@
   "panel.host.stateRunning": "在跑",
   "panel.host.stateStopped": "已停",
   "panel.host.stateUnknown": "状态读不到",
+  "panel.host.mismatch": "你已经选择由本插件接管，但内置『网络搜索』还在跑：上次停用没生效（多半是宿主管理接口回答太慢）。点下面「重新停用」再来一次，不要再去拨上面的开关。",
+  "panel.host.lastError": "上次停用的报错：{detail}",
 
   "panel.diag.title": "网络自检",
   "panel.diag.help": "挨个试一遍各个搜索来源，告诉你直连能不能用、大概多久出结果。",

@@ -77,6 +77,11 @@ CONFIG_SECTIONS = ("search", "net", "ui", "host")
 # _guard -- this list only excuses what getaddrinfo answers (plan §1.4).
 DEFAULT_SSRF_ALLOW_RANGES = ("198.18.0.0/15",)
 
+# How long a successful host-status read stays good for. Every panel action ends
+# with a context refresh, and each refresh used to pay a live loopback round trip
+# (capped at 2.5 s) -- that is what made the switches feel like they hung.
+HOST_STATE_TTL_SECONDS = 20.0
+
 _ERROR_CODES = {
     "blocked": "FREE_WEB_SEARCH_BLOCKED",
     "busy": "FREE_WEB_SEARCH_BUSY",
@@ -143,6 +148,12 @@ class FreeWebSearchPlugin(NekoPluginBase):
         self._key_state: str = "unknown"  # unknown|valid|invalid
         self._quota_state: str = ""       # ""|exhausted
         self._exa_last_error: str = ""
+        # Last good host-status read: (monotonic stamp, state dict). The panel
+        # refreshes after every action; re-asking the host each time added seconds.
+        self._host_state_cache: Optional[tuple] = None
+        # Why the latest "停用内置搜索" attempt failed, surfaced on the panel so a
+        # slow host answer is not silently swallowed into a log line.
+        self._takeover_error: str = ""
 
     # ------------------------------------------------------------------
     # configuration
@@ -150,7 +161,10 @@ class FreeWebSearchPlugin(NekoPluginBase):
 
     async def _load_sections(self) -> None:
         """Read [search] [net] [ui] [host] from the host's merged config."""
-        cfg = await self.config.dump(timeout=5.0)
+        # 8s, not the SDK's 5.0 default: this read is also the read-back that
+        # settles whether a lost-acknowledgement write actually landed, so it is
+        # correctness-critical and must outlive a slow host.
+        cfg = await self.config.dump(timeout=8.0)
         cfg = cfg if isinstance(cfg, dict) else {}
         sections: Dict[str, Dict[str, Any]] = {}
         for name in CONFIG_SECTIONS:
@@ -392,8 +406,10 @@ class FreeWebSearchPlugin(NekoPluginBase):
             return
         try:
             ok, message = await asyncio.to_thread(self._host_set_enabled_sync, False)
+            self._takeover_error = "" if ok else message
             self.logger.info("host takeover re-asserted: ok={} message={}", ok, message)
         except Exception as error:
+            self._takeover_error = _MSG_NO_HOST
             self.logger.info("host takeover re-assert failed: {}:{}", type(error).__name__, error)
 
     async def _maybe_send_first_run_notice(self) -> None:
@@ -449,9 +465,12 @@ class FreeWebSearchPlugin(NekoPluginBase):
             # unknown". The raise therefore cannot mean "not written" -- reading
             # the value back is the only way to tell the two cases apart.
             self.logger.info("config update raised {}:{}", type(error).__name__, error)
+            # _verify_persisted reloads our own view, so skip the reload below:
+            # stacking two 5 s round trips is what made the panel feel stuck.
             if not await self._verify_persisted(payload):
                 return False
             self.logger.info("config did persist; only the acknowledgement was lost")
+            return True
         try:
             await self._load_sections()
             self._coordinators.clear()
@@ -735,6 +754,12 @@ class FreeWebSearchPlugin(NekoPluginBase):
         if not results:
             return Err(SdkError("没有搜索到结果，可稍后重试或在插件设置里换后端",
                                 code="FREE_WEB_SEARCH_EMPTY"))
+        # Which backend actually answered is otherwise invisible: the host does not
+        # log tool payloads, so "did my key serve this search?" could not be asked
+        # after the fact.
+        self.logger.info("search answered: backend={} count={} attempted={}",
+                         outcome.get("backend") or "", len(results),
+                         list(outcome.get("attempted") or []))
         return Ok({
             "query": text,
             "count": len(results),
@@ -863,6 +888,11 @@ class FreeWebSearchPlugin(NekoPluginBase):
             },
             "ssrf_fake_ip": bool(self._ssrf_ranges()),
             "quota_note": _QUOTA_NOTE,
+            # The switch position comes from these two, never from the live badge:
+            # tying it to host_search.running made a confirming second click mean
+            # "start the built-in back up".
+            "takeover": self._flag_in("host", "takeover_search", False),
+            "takeover_error": getattr(self, "_takeover_error", ""),
         }
 
     def _host_control(self, timeout: float = 4.0) -> _host.HostPluginControl:
@@ -878,7 +908,25 @@ class FreeWebSearchPlugin(NekoPluginBase):
                     "error": _MSG_NO_HOST}
 
     def _host_set_enabled_sync(self, enabled: bool) -> tuple[bool, str]:
-        return self._host_control(4.0).set_enabled(_host.BUILTIN_SEARCH_PLUGIN_ID, enabled)
+        # 8s, not the old 4s: the host has been observed answering /stop and
+        # PLUGIN_NOT_RUNNING just past the 4 s mark, which used to be reported as
+        # "未能连接宿主管理接口" and pushed users to click the switch again.
+        return self._host_control(8.0).set_enabled(_host.BUILTIN_SEARCH_PLUGIN_ID, enabled)
+
+    def _cached_host_state(self) -> Optional[Dict[str, Any]]:
+        """The last good host-status read, while it is still fresh."""
+        cached = getattr(self, "_host_state_cache", None)
+        if not cached:
+            return None
+        stamp, state = cached
+        if time.monotonic() - stamp > HOST_STATE_TTL_SECONDS:
+            return None
+        return state
+
+    def _remember_host_state(self, state: Dict[str, Any]) -> None:
+        """Keep only trustworthy reads; a failed one must not age into "truth"."""
+        if isinstance(state, dict) and not state.get("error"):
+            self._host_state_cache = (time.monotonic(), dict(state))
 
     @ui.context(id="main", title="联网搜索")
     @ui.action(label="面板数据", icon="📊", group="state", order=0, refresh_context=False)
@@ -890,11 +938,20 @@ class FreeWebSearchPlugin(NekoPluginBase):
         input_schema={"type": "object", "properties": {}},
     )
     async def panel_context(self, **_):
+        # Cached first: the panel refreshes its context after *every* action, and a
+        # live loopback read used to stall each one. A fresh answer is still fetched
+        # whenever the user presses 「重新检查」 (get_host_search).
+        cached = self._cached_host_state()
+        if cached is not None:
+            return self._build_panel_context(cached)
         # The host gives context providers a ~5s budget (core/host.py:147-181),
-        # so the loopback status read here is capped at 2.5s; the panel can get
-        # the full 4s read via get_host_search when the user touches the toggle.
+        # so this loopback status read is capped at 2.5s.
         host_search = await asyncio.to_thread(self._host_search_state_sync, 2.5)
-        return self._build_panel_context(host_search)
+        self._remember_host_state(host_search)
+        # Serve the last trustworthy read when this one failed, rather than the
+        # bare error blob: the panel shows a stale-but-real state plus its own hint.
+        stored = getattr(self, "_host_state_cache", None)
+        return self._build_panel_context(stored[1] if stored else host_search)
 
     async def _finish_onboarding_if_verified(self, kind: str) -> None:
         """A verified key ends the guide -- persist that, don't just paint it.
@@ -1046,17 +1103,23 @@ class FreeWebSearchPlugin(NekoPluginBase):
     )
     async def set_host_search(self, enabled: bool = False, **_):
         want = bool(enabled)
+        # Store the intent first, whatever the host then answers: the panel switch
+        # mirrors this value, so a slow or failed management call must never snap
+        # the control back to "not taken over" -- the next click would then mean
+        # the opposite of what the user is trying to confirm (that is exactly how
+        # a stopped built-in got started again on the reporting machine).
+        await self._persist({"host": {"takeover_search": not want}})
+        self._host_state_cache = None          # the refresh after this must be live
         try:
-            # Sync loopback HTTP -> worker thread, 4s per request (W3 contract);
-            # never blocks the plugin event loop.
+            # Sync loopback HTTP -> worker thread; never blocks the plugin loop.
             ok, message = await asyncio.to_thread(self._host_set_enabled_sync, want)
         except Exception as error:
             self.logger.info("host toggle failed: {}:{}", type(error).__name__, error)
-            return Ok({"ok": False, "message": _MSG_NO_HOST, "running": not want})
-        if ok:
-            # Remember the user's intent so startup can re-assert it (plan §1.5).
-            await self._persist({"host": {"takeover_search": not want}})
-        return Ok({"ok": ok, "message": message, "running": want if ok else not want})
+            ok, message = False, _MSG_NO_HOST
+        self._takeover_error = "" if ok else message
+        self.logger.info("host search toggle: want_enabled={} ok={}", want, ok)
+        return Ok({"ok": ok, "message": message, "takeover": not want,
+                   "running": want if ok else None})
 
     @ui.action(label="查询内置搜索状态", icon="🩺", group="host", order=20, refresh_context=False)
     @plugin_entry(
@@ -1068,6 +1131,9 @@ class FreeWebSearchPlugin(NekoPluginBase):
     )
     async def get_host_search(self, **_):
         state = await asyncio.to_thread(self._host_search_state_sync, 4.0)
+        # The user asked for the truth; let the panel reuse it for a while instead
+        # of paying another live read on the next refresh.
+        self._remember_host_state(state)
         error = str(state.get("error") or "")
         running = bool(state.get("running"))
         return Ok({

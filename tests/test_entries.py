@@ -436,7 +436,7 @@ def _error_code_for(error: BaseException) -> str:
 CONTEXT_KEYS = {
     "onboarding_stage", "exa_key_masked", "exa_key_source", "exa_key_state",
     "exa_last_error", "chain", "effective_chain", "proxy_mode", "proxy_detected",
-    "host_search", "ssrf_fake_ip", "quota_note",
+    "host_search", "ssrf_fake_ip", "quota_note", "takeover", "takeover_error",
 }
 
 
@@ -700,6 +700,73 @@ def test_get_and_set_host_search_entries(monkeypatch) -> None:
     assert FakeControl.calls[-1] == ("set", entries._host.BUILTIN_SEARCH_PLUGIN_ID, False)
     # The user intent is remembered for startup ([host].takeover_search).
     assert plugin._sections["host"]["takeover_search"] is True
+
+
+def test_panel_context_caches_the_host_read_so_switches_stop_hanging(monkeypatch) -> None:
+    """Every action ends with a context refresh; it must not re-pay the round trip."""
+    reads = []
+
+    def fake_sync(self, timeout=4.0):
+        reads.append(timeout)
+        return {"exists": True, "running": False, "toggleable": True}
+
+    monkeypatch.setattr(entries.FreeWebSearchPlugin, "_host_search_state_sync", fake_sync)
+    plugin = make_plugin()
+    asyncio.run(plugin.panel_context())
+    asyncio.run(plugin.panel_context())
+    asyncio.run(plugin.panel_context())
+    assert len(reads) == 1, f"live reads per refresh: {reads}"
+
+    # A failed read must never age into "truth".
+    plugin._host_state_cache = None
+    monkeypatch.setattr(entries.FreeWebSearchPlugin, "_host_search_state_sync",
+                        lambda self, timeout=4.0: {"exists": False, "running": False,
+                                                   "toggleable": True, "error": "boom"})
+    asyncio.run(plugin.panel_context())
+    assert len(reads) == 1
+
+
+def test_set_host_search_invalidates_the_cache_and_keeps_intent_on_failure(monkeypatch) -> None:
+    reads = []
+
+    def fake_sync(self, timeout=4.0):
+        reads.append(1)
+        return {"exists": True, "running": True, "toggleable": True}
+
+    monkeypatch.setattr(entries.FreeWebSearchPlugin, "_host_search_state_sync", fake_sync)
+    plugin = make_plugin()
+    asyncio.run(plugin.panel_context())            # warms the cache
+
+    class Dead:
+        def __init__(self, *a, **k):
+            raise OSError("connection refused")
+
+    monkeypatch.setattr(entries._host, "HostPluginControl", Dead)
+    result = asyncio.run(plugin.set_host_search(enabled=False))
+    assert result.is_ok() and result.value["ok"] is False
+    # Intent is stored even though the host call failed -- the switch must not
+    # snap back, or the next click means the opposite of what the user intends.
+    assert plugin._sections["host"]["takeover_search"] is True
+    assert plugin.config.data["host"]["takeover_search"] is True
+    assert result.value["takeover"] is True and result.value["running"] is None
+    assert plugin._takeover_error                                    # surfaced copy
+    context = asyncio.run(plugin.panel_context())
+    assert context["takeover"] is True and context["takeover_error"]
+    assert len(reads) == 2, "the toggle must have dropped the cached state"
+
+
+def test_search_logs_which_backend_answered(monkeypatch) -> None:
+    """The host does not log tool payloads, so the plugin has to remember itself."""
+    plugin = make_plugin({"backend_chain": ["exa"]})
+
+    async def fake(query, limit, backend):
+        return {"results": exa_results(), "backend": "exa", "attempted": ["bing", "exa"]}
+
+    monkeypatch.setattr(plugin, "_search_with_fallback", fake)
+    asyncio.run(plugin.search(query="守望先锋 最可爱角色"))
+    blob = plugin.logger.blob()
+    assert "search answered: backend=exa count=1" in blob
+    assert "attempted=['bing', 'exa']" in blob
 
 
 def test_set_host_search_failure_degrades_without_raising(monkeypatch) -> None:

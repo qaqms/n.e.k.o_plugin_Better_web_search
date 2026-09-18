@@ -58,17 +58,21 @@ def test_panel_copy_tries_the_silent_paths_before_the_host_hook() -> None:
 
 
 def test_host_switch_states_intent_not_status() -> None:
-    """The built-in-search control must not read like a status line.
+    """The built-in-search control must mirror the stored intent, never live state.
 
-    It used to be labelled "内置「网络搜索」正在运行" with checked=running, so after the
-    user stopped it the sentence stayed on screen and looked like a failed toggle.
-    The badge is the only status claim now; the switch carries the (inverted) intent.
+    It was briefly `checked={hostKnown && !hostRunning}`: because the badge then
+    decided the switch position, a second click meant to "confirm the stop" sent
+    enabled=true and started the built-in back up (seen on a Steam install at
+    22:46:06 -> process started 22:46:07). The switch now reads [host].takeover_search,
+    and a mismatch between intent and reality gets its own warning + retry button.
     """
     root = Path(__file__).resolve().parents[1]
     tsx = (root / "ui" / "panel.tsx").read_text(encoding="utf-8")
-    body = tsx[tsx.index("function renderHostCard"):][:1400]
-    assert "checked={hostKnown && !hostRunning}" in body
+    body = tsx.split("function renderHostCard", 1)[1].split("\n  function ", 1)[0]
+    assert "checked={takeover}" in body
     assert "toggleHostSearch(!value)" in body
+    assert "!hostRunning}" not in body
+    assert "panel.host.mismatch" in body and "panel.actions.retryStop" in body
     assert "正在运行" not in _load_locale("zh-CN")["panel.host.label"]
     assert "is running" not in _load_locale("en")["panel.host.label"]
 

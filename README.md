@@ -204,9 +204,11 @@ takeover_search = false     # 在面板切"停用内置搜索"时自动置 true�
 n.e.k.o_plugin_better_web_search
 ```
 
-> 比对是 `casefold()` 的（`release_cmd.py:231`），所以现在这个写作
-> `n.e.k.o_plugin_Better_web_search` 的仓库名**直接满足要求**，不需要去 GitHub 改名。
-> 这条是插件 id 从 `free_web_search` 改成 `better_web_search` 的附带收益之一。
+> **一个字母都不能大写。** 命令行侧的比对是 `casefold()` 的（`release_cmd.py:231`），所以写作
+> `n.e.k.o_plugin_Better_web_search` 在本地自检里也过得去；但市场**投稿页区分大小写**——它取
+> `n.e.k.o_plugin_` 后面那一段当插件 id 套小写规则（这条提示语不在宿主仓库里，是网站前端的行为）。
+> 2026-09-20 投稿时被这一步拦下，于是把 GitHub 仓库名改成了现在这个全小写形式；提交历史、检查记录
+> 和旧地址跳转都保留，本地只需 `git remote set-url` 跟上。
 
 在本仓库根目录执行（本仓库与 `N.E.K.O` 是**同级**目录，所以宿主路径是 `../N.E.K.O`；`neko-plugin` 换成
 `python -m plugin.neko_plugin_cli` 的原因见上文那条坑注）：
@@ -274,11 +276,12 @@ uv run --project "../N.E.K.O" python -m plugin.neko_plugin_cli publish .
 
 先在 [Market 投稿页](https://market.project-neko.cn/#/upload) 用 GitHub 仓库地址提交一次审核，通过后这条命令会打 tag、等 GitHub Release、再通知 Market。`.github/workflows/release.yml` 会构建并上传 `better_web_search.neko-plugin`，Market 独立校验该 Release 后才上架。
 
-发布前两条会**直接报 error** 的硬条件（`plugin/neko_plugin_cli/commands/release_cmd.py`）：
+发布前会**直接报 error** 的三条硬条件（前两条在 `plugin/neko_plugin_cli/commands/release_cmd.py`，
+第三条在 `validate_cmd.py:181`）：
 
 | 条件 | 代码位置 | 本仓库现状 |
 | --- | --- | --- |
-| git origin 的仓库名必须是 `n.e.k.o_plugin_<插件 id>` | `release_cmd.py:230-232`（`casefold()` 比对） | ✅ id 改成 `better_web_search` 后，现有的 `n.e.k.o_plugin_Better_web_search` 就满足了 |
+| git origin 的仓库名必须是 `n.e.k.o_plugin_<插件 id>`，**且全小写** | `release_cmd.py:230-232`（命令行比对用 `casefold()`，投稿页比对区分大小写） | ✅ 2026-09-20 已把 GitHub 仓库名改成 `n.e.k.o_plugin_better_web_search`，本地 `git remote` 同步跟上 |
 | tag 去掉 `v` 前缀后必须等于 `plugin.toml` 的 `version` | `release_cmd.py:237-239` | ✅ 当前 `plugin.toml` 是 `0.9.6`，要打的 tag 是 `v0.9.6`；`tests/test_smoke.py::test_release_version_is_stated_once` 保证 `plugin.toml` 与 `pyproject.toml` 不打架 |
 | `[plugin].version` 必须至少三段数字 | `validate_cmd.py:181`（`^\d+\.\d+\.\d+.*$`） | ✅ 写成 `0.96` 会直接 error，所以这里是 `0.9.6` |
 

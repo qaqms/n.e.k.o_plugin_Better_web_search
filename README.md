@@ -58,6 +58,13 @@
 >
 > 其余联网功能（B 站 / YouTube / Twitch 热搜与动态、一起看、网页正文）走自己的 httpx 通道，停用内置不影响。
 > 要是你依赖上面那两条，就别在这里停用内置，或者去宿主侧把它改成可插拔。
+>
+> **停用内置之后，本插件的 `keywords` 就是宿主唯一的关键词兜底**。宿主在派发动作前有一道闸门
+> （`brain/task_executor.py:1958-1968`：`external_intent < 0.2` 且没有任何确定性信号 → 整轮不派发插件，
+> 于是"凭记忆答"），而插件侧唯一的确定性信号就是把 `keywords` 当**正则**去 `re.search`
+> （`brain/plugin_filter.py:114-124`）。内置那份里有 `查[一找]`，能命中「帮我查一下 X」；所以 `plugin.toml`
+> 的 `keywords` 必须继续覆盖内置能命中的说法，`tests/test_smoke.py::test_keyword_shortcut_covers_what_the_builtin_matched`
+> 就是钉这件事的（少一个模式，或某个日常说法匹配不上，都会红）。
 
 ## 装到自己的 N.E.K.O 上
 

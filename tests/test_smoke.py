@@ -131,6 +131,57 @@ def test_last_search_card_shows_a_record_not_a_guess() -> None:
     assert "last_search" in tsx.split("type PanelState", 1)[1].split("}", 1)[0]
 
 
+BUILTIN_SEARCH_KEYWORDS = [
+    "搜索", "search", "AnySearch", "百度", "duckduckgo", "搜一", "查[一找]", "google",
+    "검색", "찾아", "検索", "調べ", "探し", "поиск", "искать", "найти",
+]
+
+# Phrases a user actually says. Each one used to be enough to make the host
+# consider a search plugin; a takeover must not quietly lose that.
+GATE_PHRASES = [
+    "帮我查一下明天的天气",
+    "帮我查查那个店叫什么",
+    "查找这个项目的官网",
+    "搜一下猫娘计划",
+    "найти документацию по api",
+    "찾아줘 그 영화",
+]
+
+# Deliberate exceptions from the built-in's list, with the reason recorded here
+# rather than silently dropped.
+KEYWORD_EXCEPTIONS = {"AnySearch"}
+
+
+def _host_keyword_match(pattern: str, text: str) -> bool:
+    """brain/plugin_filter.py:114-124, reproduced: regex first, literal on error."""
+    try:
+        return re.search(pattern, text, re.IGNORECASE) is not None
+    except re.error:
+        return pattern.lower() in text.lower()
+
+
+def test_keyword_shortcut_covers_what_the_builtin_matched() -> None:
+    """A takeover must not make the host's keyword shortcut match less than before.
+
+    ``brain/task_executor.py:1958-1968`` skips plugin dispatch entirely when
+    ``external_intent`` is low and nothing deterministic matched, and the one
+    per-plugin deterministic signal is a regex over that plugin's keywords. Stop
+    the built-in and ours is the only list left standing -- so 「帮我查一下 X」
+    matching ``查[一找]`` there must keep matching here.
+    """
+    ours = [str(k) for k in _read_toml("plugin.toml")["plugin"]["keywords"]]
+    missing = sorted(set(BUILTIN_SEARCH_KEYWORDS) - KEYWORD_EXCEPTIONS - set(ours))
+    assert missing == [], f"内置能命中、我们漏掉的说法: {missing}"
+    for phrase in GATE_PHRASES:
+        assert any(_host_keyword_match(k, phrase) for k in ours), f"闸门关键词兜底不到：{phrase}"
+    # An invalid regex is not a crash risk on the host, but a dead pattern is.
+    for pattern in ours:
+        try:
+            re.compile(pattern)
+        except re.error as error:  # pragma: no cover - guards typo'd regexes
+            raise AssertionError(f"keyword {pattern!r} is not a valid regex: {error}") from error
+
+
 def test_host_card_recommends_stopping_and_names_the_cost() -> None:
     """The takeover switch has to sell the benefit *and* disclose the loss.
 

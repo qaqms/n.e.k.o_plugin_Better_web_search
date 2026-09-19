@@ -131,25 +131,46 @@ def test_last_search_card_shows_a_record_not_a_guess() -> None:
     assert "last_search" in tsx.split("type PanelState", 1)[1].split("}", 1)[0]
 
 
+# Copied from the host's built-in (plugin/plugins/web_search/plugin.toml:5). Read
+# literally on purpose: CI checks out only this repo, so the host tree is not there.
 BUILTIN_SEARCH_KEYWORDS = [
     "搜索", "search", "AnySearch", "百度", "duckduckgo", "搜一", "查[一找]", "google",
     "검색", "찾아", "検索", "調べ", "探し", "поиск", "искать", "найти",
 ]
 
-# Phrases a user actually says. Each one used to be enough to make the host
-# consider a search plugin; a takeover must not quietly lose that.
+# Real asks that must survive the gate brake. The first one is the user's own sentence
+# from 2026-09-19 22:45 -- one the built-in's list ALSO missed (查查 matches nothing).
 GATE_PHRASES = [
+    "你仔细帮查查然后总结一下给我",
     "帮我查一下明天的天气",
-    "帮我查查那个店叫什么",
-    "查找这个项目的官网",
+    "查一查流萤为什么人气高",
+    "查下这个角色的资料",
+    "你查查官方有没有说过",
+    "查询一下票价",
+    "查找相关资料",
+    "查看一下更新日志",
+    "上网查查这个说法",
+    "搜搜看有没有原型",
     "搜一下猫娘计划",
-    "найти документацию по api",
-    "찾아줘 그 영화",
+    "look up this character",
+    "검색해줘",
+    "調べたい",
 ]
 
-# Deliberate exceptions from the built-in's list, with the reason recorded here
-# rather than silently dropped.
-KEYWORD_EXCEPTIONS = {"AnySearch"}
+# Ordinary chat. A keyword hit is not free: task_executor.py:1503 force-unions this
+# plugin into the stage-2 candidates, :1525 labels the line [KEYWORD MATCH], and the
+# assessment prompt (config/prompts/prompts_agent.py:370,414,458) tells the model to
+# prefer labelled plugins -- so a bogus match can become a real search and burn an
+# engine cooldown that a genuine turn then has to wait behind.
+NEVER_MATCH = [
+    "这个梗好笑吗", "今天天气不错", "帮我写一段代码", "你去把钥匙找一下", "我找你找了半天",
+    "看看这个视频", "我在整理一下桌面", "这个巡逻一下就好",
+]
+
+# Where we deliberately match LESS than the built-in: its bare 查[一找] fires on
+# 检查一下身体 / 调查一下 / 审查一下, none of which is a web lookup. The lookbehind guard
+# in plugin.toml drops them -- recorded here so nobody "restores parity" by deleting it.
+INTENTIONAL_NARROWING = ["我们检查一下身体好不好", "这个案子还在调查一下", "请审查一下这份文件"]
 
 
 def _host_keyword_match(pattern: str, text: str) -> bool:
@@ -160,21 +181,31 @@ def _host_keyword_match(pattern: str, text: str) -> bool:
         return pattern.lower() in text.lower()
 
 
+def _matches_any(patterns: list[str], text: str) -> bool:
+    return any(_host_keyword_match(p, text) for p in patterns)
+
+
 def test_keyword_shortcut_covers_what_the_builtin_matched() -> None:
     """A takeover must not make the host's keyword shortcut match less than before.
 
     ``brain/task_executor.py:1958-1968`` skips plugin dispatch entirely when
-    ``external_intent`` is low and nothing deterministic matched, and the one
-    per-plugin deterministic signal is a regex over that plugin's keywords. Stop
-    the built-in and ours is the only list left standing -- so 「帮我查一下 X」
-    matching ``查[一找]`` there must keep matching here.
+    ``external_intent`` is low and nothing deterministic matched (measured:
+    ``[AgentGate] skip assessment: external_intent=0.00 < 0.20``), and the only
+    per-plugin deterministic signal is ``re.search`` over that plugin's keywords.
+    Stop the built-in and ours is the last list standing.
     """
     ours = [str(k) for k in _read_toml("plugin.toml")["plugin"]["keywords"]]
-    missing = sorted(set(BUILTIN_SEARCH_KEYWORDS) - KEYWORD_EXCEPTIONS - set(ours))
-    assert missing == [], f"内置能命中、我们漏掉的说法: {missing}"
     for phrase in GATE_PHRASES:
-        assert any(_host_keyword_match(k, phrase) for k in ours), f"闸门关键词兜底不到：{phrase}"
-    # An invalid regex is not a crash risk on the host, but a dead pattern is.
+        assert _matches_any(ours, phrase), f"闸门关键词兜底不到：{phrase}"
+    for phrase in NEVER_MATCH:
+        assert not _matches_any(ours, phrase), f"闲聊被误判成搜索：{phrase}"
+    for phrase in INTENTIONAL_NARROWING:
+        assert _matches_any(BUILTIN_SEARCH_KEYWORDS, phrase), (
+            f"内置在这句上已经不改了，{phrase!r} 该从刻意收窄清单里删掉")
+        assert not _matches_any(ours, phrase), f"否后视守卫失效：{phrase}"
+    for phrase in GATE_PHRASES + INTENTIONAL_NARROWING:
+        if _matches_any(BUILTIN_SEARCH_KEYWORDS, phrase) and phrase not in INTENTIONAL_NARROWING:
+            assert _matches_any(ours, phrase), f"比内置少命中：{phrase}"
     for pattern in ours:
         try:
             re.compile(pattern)

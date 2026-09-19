@@ -84,6 +84,35 @@
 新增 `test_keyword_shortcut_covers_what_the_builtin_matched`：把内置那份抄成断言（CI 只检出本仓库，不能去读宿主树），
 再用 6 句人话（含俄语、韩语）逐个跑宿主那套匹配语义，少一个模式或某句话匹配不上都会红。
 
+#### 当晚 22:45 的一次真实"没搜"，把这份列表又推宽了一轮
+
+用户实录：「你仔细帮查查然后总结一下给我」→ 她回「本喵这就去仔细查…」，但**一次搜索都没发生**。
+插件日志里那段时间没有任何 `TRIGGER entry='search'`；宿主日志给出了原因（对齐到毫秒）：
+
+```
+22:44:33.397  [TaskExecutor] Dispatching UserPlugin: better_web_search / search   ← 上一轮是好的
+22:45:07.504  [AgentGate] skip assessment: external_intent=0.00 < 0.20, no deterministic signal
+22:46:04.590  [TaskExecutor] Dispatching UserPlugin: better_web_search / search   ← 被质问之后才搜
+```
+
+三条结论：
+
+- **那句承诺是宿主提示词要求说的**：`config/prompts/prompts_sys.py:170-172` 让模型在被要求执行操作时
+  "只能简短说明会尝试处理"，而对话模型手里**没有**任何搜索工具（只有 `recall_memory`；插件入口靠 analyzer
+  那条链路，不是 `@llm_tool`），所以"我去查"和"真去查"本来就是两条互不知道的路。
+- 刹车的是 `external_intent=0.00` + 没有确定性信号。确定性信号只有插件 `keywords` 这一处能左右，
+  而「查查」——内置的 `查[一找]` 和我们的旧写法**都**匹配不上。
+- 于是把这轮补成带否后视的一条正则：`(?<![调检侦考审警探追巡])查(?:[一下询找看]|查|资料|了)`，
+  外加 `搜(?:[一下]|一搜|搜)` 和 `look\s?up`。14 句人话全命中（含用户那句原话、검색해줘、調べたい），
+  8 句闲聊零误命中，且顺带**消掉了内置会犯的**"检查一下身体/调查一下/审查一下"三类误伤。
+
+**为什么到此为止、不加裸 `查|搜`**：命中不只是"多跑一次评估"。`task_executor.py:1503` 会把命中的插件
+强推进 Stage-2 候选，`:1525` 在提示里把它标成 `[KEYWORD MATCH]`，而 `config/prompts/prompts_agent.py:370,414,458`
+要求模型优先选打了标的插件 —— 误命中会变成一次真搜索，还会占用引擎冷却（`baidu_min_interval` 10s、
+`cooldown_seconds` 60s 这类），把后面真正该搜的那轮挡在门外。这条边界写成用例里的两份清单。
+`test_keyword_shortcut_covers_what_the_builtin_matched` 同时断言"内置能命中的真查语句我们一句都不能少"，
+并把三处刻意收窄单独记账，免得以后有人拿"对齐内置"当理由把守卫删了。
+
 ### 面板重排：一屏 2764 字 → 分三区 + 折叠
 
 用户反馈"全是文字，乱糟糟"。量出来的确实现实：129 条文案、2764 个中文字符平铺在一张滚动页上，

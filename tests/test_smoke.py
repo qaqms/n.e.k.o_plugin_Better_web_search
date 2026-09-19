@@ -131,6 +131,33 @@ def test_last_search_card_shows_a_record_not_a_guess() -> None:
     assert "last_search" in tsx.split("type PanelState", 1)[1].split("}", 1)[0]
 
 
+def test_host_card_recommends_stopping_and_names_the_cost() -> None:
+    """The takeover switch has to sell the benefit *and* disclose the loss.
+
+    Two host features reach the built-in by name -- window_context.py:404/521/761
+    via search_gateway.py:228, and topic/materials.py:73-101, whose failure
+    _safe_fetch (materials.py:244-251) swallows without even logging -- so
+    stopping the built-in silently empties the proactive "window" source and the
+    topic material enrichment. Recommending it without saying that is a lie by
+    omission. And the copy may not promise "she will search now": that decision
+    is the host's own gate (brain/task_executor.py:1958-1968), which no plugin
+    can reach from here.
+    """
+    root = Path(__file__).resolve().parents[1]
+    tsx = (root / "ui" / "panel.tsx").read_text(encoding="utf-8")
+    body = tsx.split("function renderHostCard", 1)[1].split("\n  function ", 1)[0]
+    for key in ("panel.host.why", "panel.host.gate", "panel.host.lostTitle",
+                "panel.host.lostWindow", "panel.host.lostTopic", "panel.host.unaffected"):
+        assert key in body, f"host card dropped {key}"
+    zh, en = _load_locale("zh-CN"), _load_locale("en")
+    assert "强烈推荐" in zh["panel.host.title"]
+    assert "recommend" in en["panel.host.title"].lower()
+    assert "凭记忆" in zh["panel.host.gate"]
+    for text in (zh["panel.host.why"], zh["panel.host.gate"], zh["panel.host.lostTitle"]):
+        assert "每次都会搜" not in text and "就一定会" not in text
+    assert "梗和音乐" in zh["panel.host.lostTopic"]      # what still works, said out loud
+
+
 def test_plugin_manifest_exists() -> None:
     root = Path(__file__).resolve().parents[1]
     manifest = root / "plugin.toml"

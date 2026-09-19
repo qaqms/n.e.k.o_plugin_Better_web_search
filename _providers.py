@@ -292,7 +292,7 @@ def _mcp_call(tool: str, arguments: dict[str, Any], *, timeout: float, policy: s
     headers = {
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
-        "x-exa-source": "neko-free-web-search",
+        "x-exa-source": "neko-better-web-search",
     }
     if key:
         headers["x-api-key"] = key

@@ -266,7 +266,7 @@ i18n 显示名、TOML `name` 五者互相对齐，并把运行期会碰到的文
 
 ### 打包
 
-- **`neko-plugin` 命令入口可能解析到另一份旧宿主检出**（本机实测：`F:\ai\N.E.K.O`），那份 CLI 还没有
+- **`neko-plugin` 命令入口可能解析到另一份旧宿主检出**（实测遇到过：同级之外还有一份更早的宿主检出），那份 CLI 还没有
   entry 元数据探测步骤，于是 `build` 照样打 `[OK]`、**不给任何警告**，产物里却没有 `plugin.meta.json`。
   宿主只能退回"从 manifest 猜入口"，静态注册表得到空集；此后面板每个按钮都回
   `UI action 'xxx' is not a plugin entry`（404）。该文案由宿主
@@ -290,7 +290,7 @@ i18n 显示名、TOML `name` 五者互相对齐，并把运行期会碰到的文
   `%TEMP%\neko_build_<id>\payload\plugins\…\plugin.toml` 就是它），字节码写在暂存树里，而
   `export_package` 直接把暂存树 zip 掉、不再套一遍规则。所以"`exclude_dirs` 写 `__pycache__`"
   挡不住，只有那个环境变量挡得住；清理源码目录也没用，因为根本不在源码目录。
-- **Market 发布有两个硬前置**（读代码确认，本机 origin 目前过不了第一条）：仓库名必须是
+- **Market 发布有两个硬前置**（读代码确认，当时 origin 还过不了第一条）：仓库名必须是
   `n.e.k.o_plugin_<plugin_id>`，否则 `release_cmd.py:230-232` 直接报 error；tag 必须等于
   `plugin.toml` 的 `version`（`release_cmd.py:237-239`）。本仓库现在的 origin 是
   `…/n.e.k.o_plugin_Better_web_search`，所以**打 tag 触发的 release 工作流会被名字这条拦住**；
@@ -313,7 +313,7 @@ i18n 显示名、TOML `name` 五者互相对齐，并把运行期会碰到的文
   **静态标签**（`panel.host.label`），跟状态无关，关掉之后照样整句挂着，看起来像没生效。开关现在
   表达意图（开=已交给本插件，`checked={hostKnown && !hostRunning}`），只有右边徽章声明状态。
   顺带把实测到的真相记下来：宿主 `plugin/core/status.py` 的 `main_process_synthetic` **不是**永远
-  `stopped`——它会按 `host.is_alive()` 覆盖成 `running`/`crashed`；本机那次是因为内置 `web_search`
+  `stopped`——它会按 `host.is_alive()` 覆盖成 `running`/`crashed`；那次是因为内置 `web_search`
   在 21:24:47 随重新导入真的自启、21:25:17 才被停，那几秒显示"在跑"是**正确**的。
 - **网络自检说清楚自己在测什么**。表格原先只有"搜索来源"一列，用户无法判断测的是宿主、是 Exa
   密钥、还是匿名档。自检卡现在固定三行说明：探测的是本插件自己的通道（列出实际链路）、exa 那一行
@@ -322,7 +322,7 @@ i18n 显示名、TOML `name` 五者互相对齐，并把运行期会碰到的文
 
 ## v0.2.0
 
-面向"发行给别人用"的一次加固：默认配置不再依赖作者开发机上的本地代理，并把"能不能用"这件事
+面向"发行给别人用"的一次加固：默认配置不再依赖某台开发机上的本地代理，并把"能不能用"这件事
 变成用户自己看得懂、点得动的东西。
 
 ### 新增

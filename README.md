@@ -202,6 +202,20 @@ PYTHONDONTWRITEBYTECODE=1 uv run --project "../../N.E.K.O" python -m plugin.neko
 uv run --project "../../N.E.K.O" python -m pytest -c tests/pytest.ini tests -q
 ```
 
+面板 `ui/panel.tsx` **也能真类型检查**，不用装宿主的 `frontend/node_modules`（宿主那个
+`check-hosted-tsx.mjs` 才需要）：临时装一个 typescript，拿宿主 SDK 里现成的 `.d.ts` 当声明文件即可。
+
+```bash
+mkdir -p /tmp/tscpkg && cd /tmp/tscpkg && npm install typescript@5.6 --no-fund --no-audit
+# tsconfig 照抄宿主 plugin/sdk/hosted-ui/tsconfig.json 的 compilerOptions
+# （jsx react + jsxFactory h + jsxFragmentFactory Fragment + paths @neko/plugin-ui），
+# baseUrl 指到 <宿主>/plugin/sdk，files 带 globals.d.ts，include 指本仓库的 ui/panel.tsx
+node /tmp/tscpkg/node_modules/typescript/bin/tsc -p /tmp/tsx-check/tsconfig.json
+```
+
+建议开 `noUnusedLocals`：JSX 结构改完之后，它能抓出多余的 import（比如说明搬进 Accordion 之后就
+没人用的 `Tip`）。**这挡不住渲染问题**，版式仍然要人在真机看一遍。
+
 > `-c tests/pytest.ini` 不能省：本仓库根目录就是插件包（有 `__init__.py`），pytest 8/9 会为 rootdir 到用例之间的每层目录建 Package 节点并去 import 根 `__init__.py`，而插件独立检出时它无法作为包被导入，202 个用例会在 setup 阶段全量 CollectError。把 rootdir 收进 `tests/` 就没这个节点（与宿主 `plugin/tests/pytest.ini` 同一约定）。
 
 结构：
@@ -215,7 +229,8 @@ _resilience.py   缓存、并发合并、限流、失败退避（含 ApiKeyRejec
 _guard.py        fetch 的 SSRF 防护（allow_ranges 只对域名解析结果生效）
 _host.py         宿主内置 web_search 的状态读取与双向开关（只走宿主公开回环 API）
 _diagnose.py     网络自检编排（纯逻辑，probe 闭包由 __init__.py 注入）
-ui/panel.tsx     面板（引导三步 / 密钥管理 / 最近一次搜索回看 / 内置搜索开关 / 自检按钮）
+ui/panel.tsx     面板：三步引导（首启）+ Tabs 三区（状态=最近一次搜索/来源链路 · 设置=密钥/内置搜索开关/代理兼容 ·
+                 诊断=网络自检），解释性长句一律放进默认收起的 Accordion，首屏只留徽章、数字与主操作
 docs/quickstart.md  接入教程
 tests/           离线用例 + 真实响应夹具（**不进分发包**，见 pyproject 的 [tool.neko.build]）
 docs/plan-*.md   施工单，内部文档（**不进分发包**）

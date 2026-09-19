@@ -2,7 +2,10 @@
 //
 // 只依赖 @neko/plugin-ui 的导出；不产生任何网络请求（注册网址只是纯文本，供用户复制）。
 // 密钥只显示后端返回的掩码，输入框内容在保存后立刻清空，面板不留明文。
+// 版式约定：Tabs 分三区（状态/设置/诊断），解释性长句一律进默认收起的 Accordion，
+// 首屏只留徽章、数字和主操作 —— kit 里的 Tip 是带色边框的提示盒，多放就满屏高亮。
 import {
+  Accordion,
   Alert,
   Button,
   Card,
@@ -20,8 +23,8 @@ import {
   Step,
   Steps,
   Switch,
+  Tabs,
   Text,
-  Tip,
   useClipboard,
   useConfirm,
   useState,
@@ -528,8 +531,10 @@ export default function BetterWebSearchPanel(props: PluginSurfaceProps<PanelStat
               {label("save", "panel.actions.saveKey")}
             </Button>
           </Inline>
-          <Tip>{quotaNote}</Tip>
-          <Tip>{t("panel.guide.quota")}</Tip>
+          <Accordion id="guide-quota" title={t("panel.guide.quotaAcc")} open={false}>
+            <Text>{quotaNote}</Text>
+            <Text>{t("panel.guide.quota")}</Text>
+          </Accordion>
         </Stack>
       </Card>
     )
@@ -544,6 +549,7 @@ export default function BetterWebSearchPanel(props: PluginSurfaceProps<PanelStat
             <StatCard label={t("panel.key.stateLabel")} value={keyBadge()} />
           </Grid>
           <Text>{t("panel.done.line1")}</Text>
+          {stage === "trial" && !maskedKey ? <Alert tone="info">{t("panel.trial.line1")}</Alert> : null}
           {lastError ? <Alert tone="warning">{lastError}</Alert> : null}
           {replaceOpen ? renderKeyField("panel.guide.keyField.placeholderReplace") : null}
           <Inline gap={3} wrap>
@@ -592,21 +598,6 @@ export default function BetterWebSearchPanel(props: PluginSurfaceProps<PanelStat
     )
   }
 
-  function renderTrialCard() {
-    return (
-      <Card title={t("panel.trial.title")}>
-        <Stack>
-          <Alert tone="info">{t("panel.trial.line1")}</Alert>
-          <Inline gap={3} wrap>
-            <Button tone="primary" disabled={busy("guide") || !canCall("show_guide")} onClick={openGuide}>
-              {label("guide", "panel.actions.configureKey")}
-            </Button>
-          </Inline>
-        </Stack>
-      </Card>
-    )
-  }
-
   function renderLastSearchCard() {
     const ok = asBool(lastSearch.ok, false)
     const backend = asString(lastSearch.backend, "-")
@@ -636,16 +627,16 @@ export default function BetterWebSearchPanel(props: PluginSurfaceProps<PanelStat
               })}</Text>
             </Inline>
           ) : null}
-          {hasLastSearch && fellBack ? (
-            <Text>{t("panel.last.attempted", { chain: attempted.join(" → ") })}</Text>
-          ) : null}
-          {hasLastSearch && fellBack ? (
-            <Tip>{t("panel.last.fellBack", { first: attempted[0], backend })}</Tip>
-          ) : null}
           {hasLastSearch && !ok && message ? (
-            <Text>{t("panel.last.error", { detail: message })}</Text>
+            <Alert tone="warning">{t("panel.last.error", { detail: message })}</Alert>
           ) : null}
-          {hasLastSearch ? <Tip>{t("panel.last.help")}</Tip> : null}
+          {hasLastSearch ? (
+            <Accordion id="last-chain" title={t("panel.last.accChain")} open={false}>
+              {fellBack ? <Text>{t("panel.last.attempted", { chain: attempted.join(" → ") })}</Text> : null}
+              {fellBack ? <Text>{t("panel.last.fellBack", { first: attempted[0], backend })}</Text> : null}
+              <Text>{t("panel.last.help")}</Text>
+            </Accordion>
+          ) : null}
         </Stack>
       </Card>
     )
@@ -664,9 +655,20 @@ export default function BetterWebSearchPanel(props: PluginSurfaceProps<PanelStat
           ) : (
             <Text>{t("panel.chain.empty")}</Text>
           )}
-          <Text>{proxyDetected ? t("panel.chain.duckShown") : t("panel.chain.duckHidden")}</Text>
-          <Text>{t("panel.net.proxyLabel")}: {proxyMode}</Text>
-          <Text>{quotaNote}</Text>
+          <Text>{t("panel.chain.proxyLine", { mode: proxyMode })}</Text>
+          <Accordion id="chain-how" title={t("panel.chain.accHow")} open={false}>
+            <Text>{proxyDetected ? t("panel.chain.duckShown") : t("panel.chain.duckHidden")}</Text>
+            <Text>{quotaNote}</Text>
+          </Accordion>
+        </Stack>
+      </Card>
+    )
+  }
+
+  function renderProxyCard() {
+    return (
+      <Card title={t("panel.net.title")}>
+        <Stack>
           <Inline gap={3} wrap align="center" justify="space-between">
             <Switch
               checked={ssrfFakeIp}
@@ -679,7 +681,9 @@ export default function BetterWebSearchPanel(props: PluginSurfaceProps<PanelStat
               label={!ssrfFakeIpKnown ? t("panel.net.unknown") : ssrfFakeIp ? t("panel.net.fakeIpOn") : t("panel.net.fakeIpOff")}
             />
           </Inline>
-          <Tip>{t("panel.net.fakeIpHelp")}</Tip>
+          <Accordion id="net-fakeip" title={t("panel.net.accFakeIp")} open={false}>
+            <Text>{t("panel.net.fakeIpHelp")}</Text>
+          </Accordion>
         </Stack>
       </Card>
     )
@@ -712,10 +716,6 @@ export default function BetterWebSearchPanel(props: PluginSurfaceProps<PanelStat
             />
           </Inline>
           <Text>{hint}</Text>
-          <Tip>{t("panel.host.why")}</Tip>
-          <Tip>{t("panel.host.gate")}</Tip>
-          <Text>{t("panel.host.impact")}</Text>
-          <Text>{t("panel.host.tradeoff")}</Text>
           {takeoverMismatch ? <Alert tone="warning">{t("panel.host.mismatch")}</Alert> : null}
           {takeoverError ? <Text>{t("panel.host.lastError", { detail: takeoverError })}</Text> : null}
           <Inline gap={3} wrap>
@@ -728,6 +728,15 @@ export default function BetterWebSearchPanel(props: PluginSurfaceProps<PanelStat
               {label("hostcheck", "panel.actions.checkHost")}
             </Button>
           </Inline>
+          <Accordion id="host-why" title={t("panel.host.accWhy")} open={false}>
+            <Text>{t("panel.host.line")}</Text>
+            <Text>{t("panel.host.why")}</Text>
+            <Text>{t("panel.host.gate")}</Text>
+          </Accordion>
+          <Accordion id="host-cost" title={t("panel.host.accCost")} open={false}>
+            <Text>{t("panel.host.impact")}</Text>
+            <Text>{t("panel.host.tradeoff")}</Text>
+          </Accordion>
         </Stack>
       </Card>
     )
@@ -738,26 +747,28 @@ export default function BetterWebSearchPanel(props: PluginSurfaceProps<PanelStat
       <Card title={t("panel.diag.title")}>
         <Stack>
           <Text>{t("panel.diag.help")}</Text>
-          {/* Without this the table is ambiguous: users read "搜索来源" as "the host's
-              search" or "the AI model", and never learn whether exa was probed with
-              their key or anonymously. */}
-          <Tip>{t("panel.diag.scope", { chain: shownChain.join(" → ") || "-" })}</Tip>
-          <Tip>{maskedKey ? t("panel.diag.exaWithKey", { masked: maskedKey }) : t("panel.diag.exaAnonymous")}</Tip>
-          <Tip>{hostRunning ? t("panel.diag.hostUnrelatedOn") : t("panel.diag.hostUnrelatedOff")}</Tip>
-          <Alert tone="warning">{t("panel.diag.cost")}</Alert>
           <Switch
             checked={withProxy}
             label={t("panel.diag.dual")}
             disabled={busy("diagnose")}
             onChange={(value) => setDualPathDraft(value ? "on" : "off")}
           />
-          <Tip>{dualPathDraft === "" ? t("panel.diag.dualAuto", { state: proxyDetected ? t("panel.diag.on") : t("panel.diag.off") }) : t("panel.diag.dualHelp")}</Tip>
+          <Text>{dualPathDraft === "" ? t("panel.diag.dualAuto", { state: proxyDetected ? t("panel.diag.on") : t("panel.diag.off") }) : t("panel.diag.dualHelp")}</Text>
           <Inline gap={3} wrap>
             <Button tone="primary" disabled={busy("diagnose") || !canCall("diagnose_network")} onClick={runDiagnose}>
               {label("diagnose", "panel.actions.runDiagnose")}
             </Button>
             <RefreshButton label={t("panel.actions.refresh")} />
           </Inline>
+          <Alert tone="warning">{t("panel.diag.cost")}</Alert>
+          {/* Without this the table is ambiguous: users read "搜索来源" as "the host's
+              search" or "the AI model", and never learn whether exa was probed with
+              their key or anonymously. It belongs next to the results, not above them. */}
+          <Accordion id="diag-scope" title={t("panel.diag.accScope")} open={false}>
+            <Text>{t("panel.diag.scope", { chain: shownChain.join(" → ") || "-" })}</Text>
+            <Text>{maskedKey ? t("panel.diag.exaWithKey", { masked: maskedKey }) : t("panel.diag.exaAnonymous")}</Text>
+            <Text>{hostRunning ? t("panel.diag.hostUnrelatedOn") : t("panel.diag.hostUnrelatedOff")}</Text>
+          </Accordion>
           {diagnose ? (
             <Stack>
               <Text>{t("panel.diag.summary")}</Text>
@@ -789,17 +800,30 @@ export default function BetterWebSearchPanel(props: PluginSurfaceProps<PanelStat
   }
 
   function renderHome() {
+    // Three panes instead of one long scroll: what happened / what you can change /
+    // how to debug it. Tab state lives in the kit's module-level map, so it resets
+    // when the panel frame reloads -- the panel is a viewer, not a workspace.
+    const tabs = [
+      {
+        id: "status",
+        label: t("panel.tabs.status"),
+        content: <Stack>{renderLastSearchCard()}{renderChainCard()}</Stack>,
+      },
+      {
+        id: "setup",
+        label: t("panel.tabs.setup"),
+        content: <Stack>{renderKeyCard()}{renderHostCard()}{renderProxyCard()}</Stack>,
+      },
+      {
+        id: "diag",
+        label: t("panel.tabs.diag"),
+        content: <Stack>{renderDiagnoseCard()}</Stack>,
+      },
+    ]
     return (
       <Stack>
         {renderNotice()}
-        {/* A key in the config outranks the stored stage: installs made before the
-            stage was persisted would otherwise keep being told "you are on the free
-            tier, go configure a key" while a working key sits right there. */}
-        {stage === "trial" && !maskedKey ? renderTrialCard() : renderKeyCard()}
-        {renderLastSearchCard()}
-        {renderChainCard()}
-        {renderHostCard()}
-        {renderDiagnoseCard()}
+        <Tabs id="main" items={tabs} />
       </Stack>
     )
   }

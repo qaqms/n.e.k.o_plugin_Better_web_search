@@ -213,6 +213,66 @@ def test_host_card_recommends_stopping_and_still_discloses_the_cost() -> None:
         assert "每次都会搜" not in text and "就一定会" not in text
 
 
+_ACCORDION_BLOCK = re.compile(r"<Accordion\b.*?</Accordion>", re.S)
+
+
+def _visible_copy(block: str, catalog: dict) -> dict:
+    """Copy a user reads without clicking: accordion bodies are folded away, but an
+    accordion's own trigger title stays on screen."""
+    parts, pos = [], 0
+    for match in _ACCORDION_BLOCK.finditer(block):
+        parts.append(block[pos:match.start()])
+        parts.append(match.group(0).split(">", 1)[0] + ">")   # keep title={t("...")}
+        pos = match.end()
+    parts.append(block[pos:])
+    kept = "".join(parts)
+    return {k: catalog[k] for k in T_KEY.findall(kept) if k in catalog}
+
+
+def test_panel_layout_is_tabs_plus_folded_explanations() -> None:
+    """The three panes and the folding are the design; lock them in.
+
+    The panel used to be one scroll page of 2.8k characters, and the kit's <Tip>
+    renders as a bordered amber box -- four of those per card is what actually made
+    it read as clutter. Detail now lives in Accordions that start closed.
+    """
+    root = Path(__file__).resolve().parents[1]
+    tsx = (root / "ui" / "panel.tsx").read_text(encoding="utf-8")
+    assert "<Tip>" not in tsx, "Tip renders as an amber box; use Accordion or Text"
+    assert "<Tabs" in tsx
+    home = tsx.split("function renderHome", 1)[1]
+    for pane in ("renderKeyCard()", "renderHostCard()", "renderProxyCard()",
+                 "renderLastSearchCard()", "renderChainCard()", "renderDiagnoseCard()"):
+        assert pane in home, f"{pane} left the tab layout"
+    assert "renderTrialCard" not in tsx          # folded into the key card as an Alert
+    assert tsx.count("<Accordion") >= 6
+
+
+def test_visible_panel_copy_stays_inside_budget() -> None:
+    zh = _load_locale("zh-CN")
+    root = Path(__file__).resolve().parents[1]
+    tsx = (root / "ui" / "panel.tsx").read_text(encoding="utf-8")
+    per_card, guide_total, max_line = 1100, 460, 60
+    total, worst = 0, ("", 0)
+    for block in re.split(r"\n  function ", tsx):
+        if not block.startswith("render"):
+            continue
+        name = block.split("(", 1)[0].strip()
+        shown = _visible_copy(block, zh)
+        total += sum(len(text) for text in shown.values())
+        for key, text in shown.items():
+            if name == "renderGuide":
+                continue          # a tutorial is prose on purpose
+            if len(text) > worst[1]:
+                worst = (key, len(text))
+        if name == "renderGuide":
+            assert sum(len(v) for v in shown.values()) <= guide_total
+    # Branch-exclusive labels (one hint renders, four are counted) inflate this on
+    # purpose: the point is "no card may grow a paragraph back", not exact pixels.
+    assert total <= per_card + guide_total, f"面板可见文案回到 {total} 字"
+    assert worst[1] <= max_line, f"{worst[0]} 有 {worst[1]} 字，展开前不许这么长"
+
+
 def test_plugin_manifest_exists() -> None:
     root = Path(__file__).resolve().parents[1]
     manifest = root / "plugin.toml"

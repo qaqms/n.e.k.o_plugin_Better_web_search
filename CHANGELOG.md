@@ -46,6 +46,19 @@
 
 用词统一：面板全篇用「停用」，所以标题也写「强烈推荐停用」而不是「关闭」，避免同一张卡里两种说法。
 
+后面又补了两段，因为"会少掉什么"如果不带上"少掉的那部分平时到底影响多大"，等于把选择权又丢回给用户猜：
+
+- **影响面**（`panel.host.impact`）：主动聊天共 11 种信息源（`main_logic/proactive_chat/sources.py:104-459`：
+  news / community / video / home / personal / music / vision / window / meme …），**只有 `window` 需要搜索**，
+  而且它默认是关的（`main_logic/proactive_chat/contracts.py:50,77` `use_window_search: bool = False`）；
+  主动话题的联网增强虽然默认开着（`main_logic/topic/pipeline.py:270`），但失败时话题照发 —— 宿主自己的注释写着
+  "Any failure leaves the cheap keyword floor hint intact"（`pipeline.py:962-966`），只是开场白退成关键词提示。
+- **取舍建议 + 开回来的坑**（`panel.host.tradeoff`）：这里要更正一条我们一度写错的事实 —— 停用期间那两条路径
+  **不会**把空结果写进宿主缓存：`search_gateway.py` 里 `_store()` 全程只有一个调用点（`:460`），走的是"插件跑完了
+  但确实没结果"那条；插件停着时 `_invoke_plugin` 直接抛异常（`:369-373`）给该后端上 **300 秒失败冷却**且不写缓存，
+  冷却期内后续调用在 `:345-347` 判为 throttle 返回旧缓存或空。所以"刚把内置开回来那几分钟还是空的"的真正原因
+  是**还在冷却里**，文案按这个写。
+
 ### `keywords` 补齐到"停用内置之后也不许少搜"
 
 排查"她为什么不搜就答"时顺出来的一条真实回归风险（不是理论）：

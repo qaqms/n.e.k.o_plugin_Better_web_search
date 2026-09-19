@@ -57,6 +57,21 @@
 >    同一套素材里的「梗 / 音乐」两类走别的通道，不受影响。
 >
 > 其余联网功能（B 站 / YouTube / Twitch 热搜与动态、一起看、网页正文）走自己的 httpx 通道，停用内置不影响。
+> 这两条的实际影响面也不大：主动聊天共 11 种信息源（`main_logic/proactive_chat/sources.py:104-459`），
+> **只有 `window` 需要搜索，且它默认关闭**（`main_logic/proactive_chat/contracts.py:50`
+> `use_window_search: bool = False`）；主动话题的联网增强默认开着但**失败不阻断**，宿主自己的注释就写着
+> "Any failure leaves the cheap keyword floor hint intact"（`main_logic/topic/pipeline.py:962-966`），
+> 话题照发、只是开场白退成关键词提示。
+> 想靠"把插件 id 也叫 `web_search`、同名盖掉内置"来接这两条路是**走不通的**：注册表确实支持用户目录覆盖内置
+> （`plugin/server/application/plugins/registry_service.py:187-247`），但安装侧对 `action == "override_builtin"`
+> 的本地/zip 导入直接 409 拒绝（`plugin/server/application/plugin_cli/service.py:503-510`
+> `PLUGIN_BUILTIN_OVERRIDE_MARKET_REQUIRED`，原文 "builtin plugins can only be overridden by a SHA256-verified
+> Market package"），而且真走 Market 覆盖时包里不许带 `previous_ids`（`install_plan.py:320-321`）、
+> 已有的 `plugin_runtime_overrides.json["web_search"].enabled=false` 还会把顶替者一起停掉。
+> 所以这两条只能等宿主把 `search_gateway.py:228` 的那个 id 改成可配置。
+> 另有一条容易误判的：**停用期间那两条路径不会污染宿主缓存**（`search_gateway.py` 里 `_store()` 只有一个调用点
+> `:460`，只在"插件跑完了但没结果"时写），插件停着时是抛异常并给该后端上 300 秒失败冷却（`:369-373`、`:345-347`）。
+> 所以把内置开回来之后头几分钟还是空，是**在冷却里**，不是缓存脏了。
 > 要是你依赖上面那两条，就别在这里停用内置，或者去宿主侧把它改成可插拔。
 >
 > **停用内置之后，本插件的 `keywords` 就是宿主唯一的关键词兜底**。宿主在派发动作前有一道闸门

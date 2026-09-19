@@ -198,12 +198,16 @@ def test_host_card_recommends_stopping_and_names_the_cost() -> None:
     tsx = (root / "ui" / "panel.tsx").read_text(encoding="utf-8")
     body = tsx.split("function renderHostCard", 1)[1].split("\n  function ", 1)[0]
     for key in ("panel.host.why", "panel.host.gate", "panel.host.lostTitle",
-                "panel.host.lostWindow", "panel.host.lostTopic", "panel.host.unaffected"):
+                "panel.host.lostWindow", "panel.host.lostTopic", "panel.host.impact",
+                "panel.host.tradeoff", "panel.host.unaffected"):
         assert key in body, f"host card dropped {key}"
     zh, en = _load_locale("zh-CN"), _load_locale("en")
     assert "强烈推荐" in zh["panel.host.title"]
     assert "recommend" in en["panel.host.title"].lower()
     assert "凭记忆" in zh["panel.host.gate"]
+    # The scope claim and the re-enable warning are part of the deal, not optional colour.
+    assert "5 分钟" in zh["panel.host.tradeoff"] and "cooldown" in en["panel.host.tradeoff"]
+    assert "11" in zh["panel.host.impact"]
     for text in (zh["panel.host.why"], zh["panel.host.gate"], zh["panel.host.lostTitle"]):
         assert "每次都会搜" not in text and "就一定会" not in text
     assert "梗和音乐" in zh["panel.host.lostTopic"]      # what still works, said out loud

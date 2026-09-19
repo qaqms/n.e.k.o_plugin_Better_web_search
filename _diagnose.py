@@ -11,10 +11,10 @@ for each of them:
 * reachable but refusing us (anti-bot challenge page)    -> stop trusting that backend
 * working but spent    (quota exhausted, key rejected)   -> wait, or add an own API key
 
-Measured on the author's machine (mainland, ``ProxyEnable=0``, local 7897 not wired
-in): exa / anysearch / bing answer directly, baidu replies with a 百度安全验证 page,
+Measured on a mainland machine with a direct route and no system proxy wired in:
+exa / anysearch / bing answer directly, baidu replies with a 百度安全验证 page,
 sogou parses to nothing, duckduckgo times out on polluted DNS and fails TLS even
-through the proxy. ``run()`` reproduces exactly that table on the user's machine.
+through a proxy. ``run()`` reproduces exactly that table on the user's machine.
 
 Design constraints
 ------------------

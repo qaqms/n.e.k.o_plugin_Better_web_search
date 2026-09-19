@@ -182,35 +182,35 @@ def test_keyword_shortcut_covers_what_the_builtin_matched() -> None:
             raise AssertionError(f"keyword {pattern!r} is not a valid regex: {error}") from error
 
 
-def test_host_card_recommends_stopping_and_names_the_cost() -> None:
-    """The takeover switch has to sell the benefit *and* disclose the loss.
+def test_host_card_recommends_stopping_and_still_discloses_the_cost() -> None:
+    """One compact sentence, not a warning list -- but not silence either.
 
-    Two host features reach the built-in by name -- window_context.py:404/521/761
-    via search_gateway.py:228, and topic/materials.py:73-101, whose failure
-    _safe_fetch (materials.py:244-251) swallows without even logging -- so
-    stopping the built-in silently empties the proactive "window" source and the
-    topic material enrichment. Recommending it without saying that is a lie by
-    omission. And the copy may not promise "she will search now": that decision
-    is the host's own gate (brain/task_executor.py:1958-1968), which no plugin
-    can reach from here.
+    The card used to spell out the two host features that stop working when the
+    built-in is stopped (window_context.py:404/521/761 via search_gateway.py:228,
+    and topic/materials.py:73-101). On 2026-09-19 the user asked for that block
+    back -- the impact is small: only the "window" proactive source needs a search
+    and it is off by default (main_logic/proactive_chat/contracts.py:50), and topic
+    enrichment failing does not stop the topic (pipeline.py:962-966). What must stay
+    is the one-line disclosure plus the 5-minute re-enable gotcha
+    (search_gateway.py:369-373 arms the cooldown, so empty right after re-enabling
+    is the cooldown, not a broken toggle). The full file:line detail lives in README.
     """
     root = Path(__file__).resolve().parents[1]
     tsx = (root / "ui" / "panel.tsx").read_text(encoding="utf-8")
     body = tsx.split("function renderHostCard", 1)[1].split("\n  function ", 1)[0]
-    for key in ("panel.host.why", "panel.host.gate", "panel.host.lostTitle",
-                "panel.host.lostWindow", "panel.host.lostTopic", "panel.host.impact",
-                "panel.host.tradeoff", "panel.host.unaffected"):
+    for key in ("panel.host.why", "panel.host.gate", "panel.host.impact", "panel.host.tradeoff"):
         assert key in body, f"host card dropped {key}"
+    for removed in ("panel.host.lostTitle", "panel.host.lostWindow",
+                    "panel.host.lostTopic", "panel.host.unaffected"):
+        assert removed not in tsx, f"{removed} came back without being asked for"
     zh, en = _load_locale("zh-CN"), _load_locale("en")
     assert "强烈推荐" in zh["panel.host.title"]
     assert "recommend" in en["panel.host.title"].lower()
     assert "凭记忆" in zh["panel.host.gate"]
-    # The scope claim and the re-enable warning are part of the deal, not optional colour.
+    assert "窗口" in zh["panel.host.impact"] and "梗和音乐" in zh["panel.host.impact"]
     assert "5 分钟" in zh["panel.host.tradeoff"] and "cooldown" in en["panel.host.tradeoff"]
-    assert "11" in zh["panel.host.impact"]
-    for text in (zh["panel.host.why"], zh["panel.host.gate"], zh["panel.host.lostTitle"]):
+    for text in (zh["panel.host.why"], zh["panel.host.gate"], zh["panel.host.impact"]):
         assert "每次都会搜" not in text and "就一定会" not in text
-    assert "梗和音乐" in zh["panel.host.lostTopic"]      # what still works, said out loud
 
 
 def test_plugin_manifest_exists() -> None:

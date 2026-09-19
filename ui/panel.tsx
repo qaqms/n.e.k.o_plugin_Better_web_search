@@ -714,12 +714,8 @@ export default function BetterWebSearchPanel(props: PluginSurfaceProps<PanelStat
           <Text>{hint}</Text>
           <Tip>{t("panel.host.why")}</Tip>
           <Tip>{t("panel.host.gate")}</Tip>
-          <Text>{t("panel.host.lostTitle")}</Text>
-          <Text>{t("panel.host.lostWindow")}</Text>
-          <Text>{t("panel.host.lostTopic")}</Text>
-          <Tip>{t("panel.host.impact")}</Tip>
+          <Text>{t("panel.host.impact")}</Text>
           <Text>{t("panel.host.tradeoff")}</Text>
-          <Tip>{t("panel.host.unaffected")}</Tip>
           {takeoverMismatch ? <Alert tone="warning">{t("panel.host.mismatch")}</Alert> : null}
           {takeoverError ? <Text>{t("panel.host.lastError", { detail: takeoverError })}</Text> : null}
           <Inline gap={3} wrap>

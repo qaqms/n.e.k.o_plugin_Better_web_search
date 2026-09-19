@@ -2,7 +2,7 @@
 
 给 N.E.K.O 的免 API Key 联网搜索 + 网页正文阅读插件。**装好就能用，不需要注册任何服务、不需要填任何 Key。**
 
-一个不需要任何 API Key 的联网搜索与网页正文阅读插件，开箱即用，失败自动切换后端。插件自带面板：首装猫娘会开口引导；面板里可一键填 Exa 免费密钥（可选）、一键停用宿主内置搜索、一键网络自检。
+一个不需要任何 API Key 的联网搜索与网页正文阅读插件，开箱即用，失败自动切换后端。插件自带面板：首装猫娘会开口引导；面板分**状态 / 设置 / 诊断**三区（`Tabs`），长段解释一律收在默认收起的折叠块里，首屏只留徽章、数字和主操作。可一键填 Exa 免费密钥（可选）、一键停用宿主内置搜索、一键网络自检。
 
 ---
 
@@ -14,7 +14,7 @@
 
 | 后端 | 要不要 Key | 原理 | 国内直连（实测） |
 | --- | --- | --- | --- |
-| `exa`（默认首选） | 不要（可选填自己的免费 Key） | Exa 的公共 MCP 端点 `mcp.exa.ai`，对方替所有匿名用户付钱 | ✅ 快路径约 1.0–1.8s，返回标题+链接+高亮片段 |
+| `exa`（默认首选） | 不要（可选填自己的免费 Key） | Exa 的公共 MCP 端点 `mcp.exa.ai`，对方替所有匿名用户付钱 | ✅ 快路径约 1.0–2.0s（2026-09-19 真机五次实测 1.8–2.0s），返回标题+链接+高亮片段 |
 | `anysearch` | 不要（可选填） | AnySearch 的匿名档 | ✅ 1.2–5.0s |
 | `bing` | 不要 | 抓结果页 | ✅ 约 0.6s，中英文都好，已进默认链路 |
 | `baidu` | 不要 | 抓结果页 + BAIDUID 预热 | ❌ 直连裸请求回"百度安全验证"（HTTP 200 验证页），预热才有救，排链路末位 |
@@ -29,7 +29,8 @@
 ### 想更稳？填一个 Exa 免费 Key（可选，不是必需）
 
 - 注册地址 <https://dashboard.exa.ai/api-keys>，国内**直连可达**；登录只有 Google / Email 两种方式，国内建议走 **Email 注册**。
-- 免费档 = 注册送 $20，之后**每月刷新 $10**；实测 `/search` 单价 $7/1k，≈ **1400 次/月 ≈ 47 次/天**。
+- 免费档 = 注册送 $20，之后**每月刷新 $10**；≈ **1400 次/月 ≈ 47 次/天**。
+- 计费口径：Exa 定价页写的是 *$7 per 1k requests (up to 10 results)*，**一次请求最多 10 条不加价**，超出部分另计 $1/1k。本插件走 `https://mcp.exa.ai/mcp` 的 `web_search_exa` 工具（带 Key 也是同一个端点，Key 放在 `x-api-key` 头），实测响应里 `costDollars.total = 0.007`，且 numResults 取 2/6/10 **同价**（`docs/plan-v0.2.md` §0）。所以 1400 次/月这个数只在"每次 ≤10 条"时成立；我们允许 `max_results` 到 15，模型要满 15 条的那次大约是 $0.012。
 - 不填 Key 照样能搜。填 Key 买到的是**额度确定性**，不是速度：实测 advanced 档 3.7–11.7s 会顶穿 12s 预算，所以 `exa_tool = "auto"` 恒用快路径（带不带 Key 都一样）。
 - Key 无效 / 额度用尽：本次搜索**自动降级回匿名档**，不会因此搜不到；面板会提示"密钥无效，请到面板重新填写"。
 - 安全：Key 只存在本插件配置里；日志、状态上报、面板回显一律最多出现 `exa****尾4位`（宿主日志不脱敏，所以我们连状态都不写明文）。
@@ -75,11 +76,28 @@
 > 要是你依赖上面那两条，就别在这里停用内置，或者去宿主侧把它改成可插拔。
 >
 > **停用内置之后，本插件的 `keywords` 就是宿主唯一的关键词兜底**。宿主在派发动作前有一道闸门
-> （`brain/task_executor.py:1958-1968`：`external_intent < 0.2` 且没有任何确定性信号 → 整轮不派发插件，
+> （`brain/task_executor.py:1958-1968`：`external_intent < 0.2` 且没有任何确定性信号 → **整轮不派发任何插件**，
 > 于是"凭记忆答"），而插件侧唯一的确定性信号就是把 `keywords` 当**正则**去 `re.search`
-> （`brain/plugin_filter.py:114-124`）。内置那份里有 `查[一找]`，能命中「帮我查一下 X」；所以 `plugin.toml`
-> 的 `keywords` 必须继续覆盖内置能命中的说法，`tests/test_smoke.py::test_keyword_shortcut_covers_what_the_builtin_matched`
-> 就是钉这件事的（少一个模式，或某个日常说法匹配不上，都会红）。
+> （`brain/plugin_filter.py:114-124`）。实测过它真的会咬人：2026-09-19 22:45:07 用户说
+> 「你仔细帮查查然后总结一下给我」，宿主日志是
+> `[AgentGate] skip assessment: external_intent=0.00 < 0.20, no deterministic signal` —— 于是那句
+> "本喵这就去仔细查"之后什么都没有发生（顺带说明：那句承诺是 `config/prompts/prompts_sys.py:170-172`
+> 要求模型说的，而对话模型的工具表里**没有**搜索工具，插件入口走的是另一条 analyzer 链路，所以
+> "说去查"和"真去查"是两条互不知情的路）。
+>
+> 所以本仓库的 `keywords` 比内置更宽：`(?<![调检侦考审警探追巡])查(?:[一下询找看]|查|资料|了)`
+> 覆盖 查查/查下/查询/查找/查看/查了，内置的 `查[一找]` 和旧写法都漏了这些（**「查查」两边都命中不了**，
+> 这不是接管带来的回归）；另有 `搜(?:[一下]|一搜|搜)` 与 `look\s?up`。那条否后视同时消掉了内置会犯的
+> "检查一下身体 / 调查一下 / 审查一下"三类误伤。
+>
+> **不要再往裸 `查|搜` 加**：命中不只是"多跑一次评估"——`task_executor.py:1503` 会把命中的插件强推进
+> Stage-2 候选、`:1525` 在提示里打上 `[KEYWORD MATCH]`，而评估提示（`config/prompts/prompts_agent.py:370,414,458`）
+> 要求模型**优先**选打了标的插件，所以误命中会变成一次真搜索并占用引擎冷却，把后面真该搜的那轮挡在门外。
+> 这条边界由 `tests/test_smoke.py::test_keyword_shortcut_covers_what_the_builtin_matched` 钉住：
+> 该命中清单、不许命中清单、以及"我们刻意比内置窄"的三处，分开记账。
+>
+> 仍然要说清楚：`external_intent` 那个分是宿主打的，插件改不了；加宽只保证"闸门不会因为没关键词而刹这一轮"，
+> 最后仍由 analyzer 判断要不要派发。日常最可靠的说法还是带「搜」字。
 
 ## 装到自己的 N.E.K.O 上
 
@@ -148,6 +166,9 @@ uv run python -m plugin.neko_plugin_cli build "../plugins/better_web_search"
 [search]
 backend = "auto"
 backend_chain = ["exa", "anysearch", "bing", "baidu"]   # 按直连实测排序；ddg 只有在检测到代理时才会被真正使用
+max_results = 6           # 只是"模型没填时"的默认值：对话里模型会自己填 max_results 并压过这里
+                          # （再被收敛到 1..15）。目前**没有**能硬性限制单次条数的开关——实测
+                          # 模型会要 5 也会要 10；面板的「最近一次搜索」能看到当次要了几条。
 
 # 代理：这是"搜索突然不能用"的头号原因
 proxy = "auto"              # auto=跟随系统/环境变量，off=不用，on=全走，或直接填 http://127.0.0.1:7890
@@ -187,19 +208,26 @@ n.e.k.o_plugin_better_web_search
 > `n.e.k.o_plugin_Better_web_search` 的仓库名**直接满足要求**，不需要去 GitHub 改名。
 > 这条是插件 id 从 `free_web_search` 改成 `better_web_search` 的附带收益之一。
 
-在本仓库根目录（`neko-plugin` 换成 `python -m plugin.neko_plugin_cli` 的原因见上文那条坑注）：
+在本仓库根目录执行（本仓库与 `N.E.K.O` 是**同级**目录，所以宿主路径是 `../N.E.K.O`；`neko-plugin` 换成
+`python -m plugin.neko_plugin_cli` 的原因见上文那条坑注）：
 
 ```bash
-uvx ruff==0.12.4 check --ignore-noqa --config ruff.toml .
-uv run --project "../../N.E.K.O" python -m plugin.neko_plugin_cli check .
+uv run --project "../N.E.K.O" python -m plugin.neko_plugin_cli check .
 # 含 lint + 测试 + 构建 + 包校验；带 NO-BYTECODE 才能得到干净的包
-PYTHONDONTWRITEBYTECODE=1 uv run --project "../../N.E.K.O" python -m plugin.neko_plugin_cli check -r .
+PYTHONDONTWRITEBYTECODE=1 uv run --project "../N.E.K.O" python -m plugin.neko_plugin_cli check -r .
+uvx ruff==0.12.4 check --ignore-noqa --config ruff.toml .
 ```
+
+> ⚠️ **别写成 `--project "../../N.E.K.O"`**。在写这份文档的那台机器上，`../../N.E.K.O` **也存在**，
+> 但它是一个早了将近一个月的宿主检出（`F:\ai\N.E.K.O` @ `fb78210a` 2026-08-21，对比同级那份
+> `a3c82b5a` 2026-09-17）。指向它的后果是上文那条坑：老 CLI 没有 entry 元数据探测步骤，构建照样
+> `[OK]` 却不出 `plugin.meta.json`，面板按钮全部 404。判断标准是构建后自验包里有没有 `plugin.meta.json`，
+> 而不是命令有没有报错。
 
 单元测试是**离线**的（`tests/fixtures/` 里是真实响应结构，不联网）：
 
 ```bash
-uv run --project "../../N.E.K.O" python -m pytest -c tests/pytest.ini tests -q
+uv run --project "../N.E.K.O" python -m pytest -c tests/pytest.ini tests -q
 ```
 
 面板 `ui/panel.tsx` **也能真类型检查**，不用装宿主的 `frontend/node_modules`（宿主那个
@@ -216,13 +244,13 @@ node /tmp/tscpkg/node_modules/typescript/bin/tsc -p /tmp/tsx-check/tsconfig.json
 建议开 `noUnusedLocals`：JSX 结构改完之后，它能抓出多余的 import（比如说明搬进 Accordion 之后就
 没人用的 `Tip`）。**这挡不住渲染问题**，版式仍然要人在真机看一遍。
 
-> `-c tests/pytest.ini` 不能省：本仓库根目录就是插件包（有 `__init__.py`），pytest 8/9 会为 rootdir 到用例之间的每层目录建 Package 节点并去 import 根 `__init__.py`，而插件独立检出时它无法作为包被导入，202 个用例会在 setup 阶段全量 CollectError。把 rootdir 收进 `tests/` 就没这个节点（与宿主 `plugin/tests/pytest.ini` 同一约定）。
+> `-c tests/pytest.ini` 不能省：本仓库根目录就是插件包（有 `__init__.py`），pytest 8/9 会为 rootdir 到用例之间的每层目录建 Package 节点并去 import 根 `__init__.py`，而插件独立检出时它无法作为包被导入，全部用例会在 setup 阶段集体 CollectError。把 rootdir 收进 `tests/` 就没这个节点（与宿主 `plugin/tests/pytest.ini` 同一约定）。
 
 结构：
 
 ```text
 __init__.py      插件主体：四段配置、后端编排与代理感知裁剪、回退、对话入口、最近一次搜索记录、面板 entry、首启引导
-_providers.py    exa / anysearch / bing / baidu / duckduckgo / searxng + 正文抓取（exa 支持密钥）
+_providers.py    exa / anysearch / bing / baidu / duckduckgo / sogou / searxng + 正文抓取（exa 支持密钥）
 _parsing.py      零依赖 HTML 解析（结果卡片打分 + 正文线性化 + GBK 容错解码）
 _net.py          标准库 HTTP + 代理策略
 _resilience.py   缓存、并发合并、限流、失败退避（含 ApiKeyRejected / QuotaExhausted 错误）
@@ -241,7 +269,7 @@ docs/plan-*.md   施工单，内部文档（**不进分发包**）
 ## 发布到 Market
 
 ```bash
-uv run --project "../../N.E.K.O" python -m plugin.neko_plugin_cli publish .
+uv run --project "../N.E.K.O" python -m plugin.neko_plugin_cli publish .
 ```
 
 先在 [Market 投稿页](https://market.project-neko.cn/#/upload) 用 GitHub 仓库地址提交一次审核，通过后这条命令会打 tag、等 GitHub Release、再通知 Market。`.github/workflows/release.yml` 会构建并上传 `better_web_search.neko-plugin`，Market 独立校验该 Release 后才上架。
@@ -251,10 +279,11 @@ uv run --project "../../N.E.K.O" python -m plugin.neko_plugin_cli publish .
 | 条件 | 代码位置 | 本仓库现状 |
 | --- | --- | --- |
 | git origin 的仓库名必须是 `n.e.k.o_plugin_<插件 id>` | `release_cmd.py:230-232`（`casefold()` 比对） | ✅ id 改成 `better_web_search` 后，现有的 `n.e.k.o_plugin_Better_web_search` 就满足了 |
-| tag 去掉 `v` 前缀后必须等于 `plugin.toml` 的 `version` | `release_cmd.py:237-239` | ✅ 发 `v0.3.0`；`tests/test_smoke.py::test_release_version_is_stated_once` 保证 `plugin.toml` 与 `pyproject.toml` 不打架 |
+| tag 去掉 `v` 前缀后必须等于 `plugin.toml` 的 `version` | `release_cmd.py:237-239` | ✅ 当前 `plugin.toml` 是 `0.4.0`，要打的 tag 是 `v0.4.0`；`tests/test_smoke.py::test_release_version_is_stated_once` 保证 `plugin.toml` 与 `pyproject.toml` 不打架 |
 
-> 剩下没做的只有"打 tag + 投稿 Market"这一步：本仓库至今**零 tag**（v0.2.0/v0.2.1 都没打过），
-> 所以 Market 上至今没有这个插件。
+> 剩下没做的只有"打 tag + 投稿 Market"这一步：本仓库至今**零 tag**（v0.2.0 到 v0.4.0 一个都没打过），
+> 所以 Market 上至今没有这个插件。GitHub 上的 `main` 已经比 tag 领先多个提交，**发布前要先确认推上去的
+> 就是你要发的那一棵树**。
 
 ## Entry
 

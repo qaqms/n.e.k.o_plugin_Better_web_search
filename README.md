@@ -279,8 +279,8 @@ uv run --project "../N.E.K.O" python -m plugin.neko_plugin_cli publish .
 | 条件 | 代码位置 | 本仓库现状 |
 | --- | --- | --- |
 | git origin 的仓库名必须是 `n.e.k.o_plugin_<插件 id>` | `release_cmd.py:230-232`（`casefold()` 比对） | ✅ id 改成 `better_web_search` 后，现有的 `n.e.k.o_plugin_Better_web_search` 就满足了 |
-| tag 去掉 `v` 前缀后必须等于 `plugin.toml` 的 `version` | `release_cmd.py:237-239` | ✅ 当前 `plugin.toml` 是 `0.96.0`，要打的 tag 是 `v0.96.0`；`tests/test_smoke.py::test_release_version_is_stated_once` 保证 `plugin.toml` 与 `pyproject.toml` 不打架 |
-| `[plugin].version` 必须至少三段数字 | `validate_cmd.py:181`（`^\d+\.\d+\.\d+.*$`） | ✅ 写成 `0.96` 会直接 error，所以这里是 `0.96.0` |
+| tag 去掉 `v` 前缀后必须等于 `plugin.toml` 的 `version` | `release_cmd.py:237-239` | ✅ 当前 `plugin.toml` 是 `0.9.6`，要打的 tag 是 `v0.9.6`；`tests/test_smoke.py::test_release_version_is_stated_once` 保证 `plugin.toml` 与 `pyproject.toml` 不打架 |
+| `[plugin].version` 必须至少三段数字 | `validate_cmd.py:181`（`^\d+\.\d+\.\d+.*$`） | ✅ 写成 `0.96` 会直接 error，所以这里是 `0.9.6` |
 
 > 剩下没做的只有"打 tag + 投稿 Market"这一步：本仓库至今**零 tag**（内部编号 v0.2.0 到 v0.4.0 一个都没
 > 打过，当前这版同样还没打），

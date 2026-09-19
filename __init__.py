@@ -154,6 +154,9 @@ class BetterWebSearchPlugin(NekoPluginBase):
         # Why the latest "停用内置搜索" attempt failed, surfaced on the panel so a
         # slow host answer is not silently swallowed into a log line.
         self._takeover_error: str = ""
+        # The one search the user just asked about, shaped for the panel. Only
+        # counts, timings and backend names -- never the query text.
+        self._last_search: Optional[Dict[str, Any]] = None
 
     # ------------------------------------------------------------------
     # configuration
@@ -727,25 +730,39 @@ class BetterWebSearchPlugin(NekoPluginBase):
         limit = max(1, min(int(wanted or 6), 15))  # pi-lens-ignore: unchecked-throwing-call-python
         self.logger.info("search: query_len={} limit={} backend={}", len(text), limit,
                          backend or "auto")
+        started = time.monotonic()
+        result, attempted = await self._run_search(text, limit, str(backend or "auto"))
+        self._record_search(result, attempted, text=text, limit=limit, started=started)
+        return result
+
+    async def _run_search(self, text: str, limit: int, backend: str):
+        """One search attempt, returning ``(result, backends actually tried)``.
+
+        ``attempted`` comes back beside the result instead of inside it: the
+        empty-answers case fails the same way it succeeded as far as the payload
+        is concerned, and that is the case where "which engines did we walk
+        through" is the only useful answer.
+        """
         try:
-            outcome = await self._search_with_fallback(text, limit, str(backend or "auto"))
+            outcome = await self._search_with_fallback(text, limit, backend)
         except (BlockedError, BusyError, CooldownError) as error:  # pi-lens-ignore: no-boolean-in-except
-            return Err(SdkError(str(error), code=_error_code(error) or _ERROR_CODES["blocked"]))
+            return Err(SdkError(str(error), code=_error_code(error) or _ERROR_CODES["blocked"])), []
         except (SearchProviderError, TimeoutError, asyncio.TimeoutError) as error:
             code = _error_code(error)
             if code == _ERROR_CODES["key_invalid"]:
                 # Distinguishable, actionable copy (plan §1.3): the panel is
                 # where the key is fixed, and the text never contains the key.
-                return Err(SdkError(_MSG_KEY_INVALID, code=code))
+                return Err(SdkError(_MSG_KEY_INVALID, code=code)), []
             if code == _ERROR_CODES["quota"]:
-                return Err(SdkError(_MSG_QUOTA, code=code))
-            return Err(SdkError(f"搜索失败: {type(error).__name__}", code=code))
+                return Err(SdkError(_MSG_QUOTA, code=code)), []
+            return Err(SdkError(f"搜索失败: {type(error).__name__}", code=code)), []
         except Exception as error:
             # Exception text can carry the full request URL (and thus the query),
             # so only the type name goes back to the conversation.
             self.logger.exception("search failed")
-            return Err(SdkError(f"搜索失败: {type(error).__name__}"))
+            return Err(SdkError(f"搜索失败: {type(error).__name__}")), []
 
+        attempted = [str(name) for name in outcome.get("attempted") or []]
         results = [{
             "title": _parsing.sanitize_text(item.get("title"), _parsing.MAX_TITLE_LEN),
             "url": str(item.get("url") or ""),
@@ -753,20 +770,45 @@ class BetterWebSearchPlugin(NekoPluginBase):
         } for item in outcome.get("results", []) if str(item.get("url") or "").startswith("http")]
         if not results:
             return Err(SdkError("没有搜索到结果，可稍后重试或在插件设置里换后端",
-                                code="BETTER_WEB_SEARCH_EMPTY"))
+                                code="BETTER_WEB_SEARCH_EMPTY")), attempted
         # Which backend actually answered is otherwise invisible: the host does not
         # log tool payloads, so "did my key serve this search?" could not be asked
         # after the fact.
         self.logger.info("search answered: backend={} count={} attempted={}",
-                         outcome.get("backend") or "", len(results),
-                         list(outcome.get("attempted") or []))
+                         outcome.get("backend") or "", len(results), attempted)
         return Ok({
             "query": text,
             "count": len(results),
             "backend": outcome.get("backend", ""),
+            "attempted": attempted,
             "summary": self._build_summary(text, results, outcome.get("backend", "")),
             "results": results,
-        })
+        }), attempted
+
+    def _record_search(self, result, attempted: List[str], *, text: str, limit: int,
+                       started: float) -> None:
+        """Remember the latest conversation-facing search so the panel can show it.
+
+        Everything the user could want to know after a search -- which backend
+        answered, whether the chain had to fall back, how long it took -- existed
+        only in our own log file, because the host does not log plugin tool
+        payloads. The query itself is stored as its length: this dict travels into
+        the panel context, and status payloads reach host logs verbatim.
+        """
+        payload = result.value if result.is_ok() else {}
+        error = None if result.is_ok() else result.error
+        self._last_search = {
+            "ok": bool(payload.get("results")),
+            "backend": str(payload.get("backend") or ""),
+            "count": int(payload.get("count") or 0),
+            "requested": int(limit),
+            "attempted": [str(name) for name in attempted][:8],
+            "query_len": len(text),
+            "ms": int((time.monotonic() - started) * 1000),
+            "at": time.strftime("%H:%M:%S"),
+            "message": str(error) if error is not None else "",
+            "code": str(getattr(error, "code", "") or "") if error is not None else "",
+        }
 
     @plugin_entry(
         id="fetch",
@@ -893,6 +935,7 @@ class BetterWebSearchPlugin(NekoPluginBase):
             # "start the built-in back up".
             "takeover": self._flag_in("host", "takeover_search", False),
             "takeover_error": getattr(self, "_takeover_error", ""),
+            "last_search": dict(getattr(self, "_last_search", None) or {}),
         }
 
     def _host_control(self, timeout: float = 4.0) -> _host.HostPluginControl:

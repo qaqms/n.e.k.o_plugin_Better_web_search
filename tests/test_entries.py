@@ -93,6 +93,7 @@ def make_plugin(search: dict | None = None, *, net_: dict | None = None,
     plugin._key_state = "unknown"
     plugin._quota_state = ""
     plugin._exa_last_error = ""
+    plugin._last_search = None
     plugin.config = FakeConfig(data)
     sections = plugin._sections
     sections["search"] = dict(data.get("search") or {})
@@ -437,6 +438,7 @@ CONTEXT_KEYS = {
     "onboarding_stage", "exa_key_masked", "exa_key_source", "exa_key_state",
     "exa_last_error", "chain", "effective_chain", "proxy_mode", "proxy_detected",
     "host_search", "ssrf_fake_ip", "quota_note", "takeover", "takeover_error",
+    "last_search",
 }
 
 
@@ -469,6 +471,112 @@ def test_panel_context_defaults_without_key(monkeypatch) -> None:
     assert context["exa_key_masked"] == ""
     assert context["exa_key_source"] == "none"
     assert context["chain"] == ["exa", "anysearch", "bing", "baidu"]
+    assert context["last_search"] == {}
+
+
+# ---------------------------------------------------------------------------
+# E1. the panel's "last search" card: what the log line already knew
+# ---------------------------------------------------------------------------
+
+QUERY = "猫娘计划 第一集 什么时候 播出"
+
+
+def _stub_chain(plugin, monkeypatch, outcome=None, error=None):
+    async def fake(query: str, limit: int, backend: str):
+        if error is not None:
+            raise error
+        return outcome
+
+    monkeypatch.setattr(plugin, "_search_with_fallback", fake)
+
+
+class _BoomControl:
+    """Constructing it fails, exactly like a host whose API is down."""
+
+    def __init__(self, *args, **kwargs):
+        raise OSError("host api down")
+
+
+def test_search_records_who_answered_and_how_long(monkeypatch) -> None:
+    monkeypatch.setattr(net, "system_proxy_present", lambda: False)
+    plugin = make_plugin({"backend_chain": ["bing", "exa"]})
+    _stub_chain(plugin, monkeypatch, {
+        "results": exa_results(), "backend": "exa", "attempted": ["bing", "exa"],
+    })
+    assert plugin._last_search is None
+    assert asyncio.run(plugin.search(query=QUERY)).is_ok()
+
+    record = plugin._last_search
+    assert record["ok"] is True
+    assert record["backend"] == "exa"
+    assert record["count"] == 1
+    assert record["requested"] == 6
+    assert record["attempted"] == ["bing", "exa"]
+    assert record["query_len"] == len(QUERY)
+    assert record["ms"] >= 0
+    assert record["at"].count(":") == 2                # a clock, not a timestamp blob
+    assert record["message"] == "" and record["code"] == ""
+
+
+def test_last_search_card_data_carries_no_query_text(monkeypatch) -> None:
+    monkeypatch.setattr(net, "system_proxy_present", lambda: False)
+    monkeypatch.setattr(entries._host, "HostPluginControl", _BoomControl)
+    plugin = make_plugin({"backend_chain": ["exa"]})
+    _stub_chain(plugin, monkeypatch, {
+        "results": exa_results(), "backend": "exa", "attempted": ["exa"],
+    })
+    asyncio.run(plugin.search(query=QUERY))
+    context = asyncio.run(plugin.panel_context())
+    assert context["last_search"]["backend"] == "exa"
+    assert context["last_search"]["count"] == 1
+    # The context goes through the host, and the host logs what it receives.
+    assert QUERY not in json.dumps(context, ensure_ascii=False)
+    assert "猫娘" not in json.dumps(context, ensure_ascii=False)
+
+
+def test_blocked_backend_failure_is_recorded_with_the_copy_the_chat_got(monkeypatch) -> None:
+    monkeypatch.setattr(net, "system_proxy_present", lambda: False)
+    plugin = make_plugin({"backend_chain": ["bing"]})
+    _stub_chain(plugin, monkeypatch, error=resilience.BlockedError("验证页"))
+    outcome = asyncio.run(plugin.search(query=QUERY))
+    assert outcome.is_err()
+
+    record = plugin._last_search
+    assert record["ok"] is False and record["count"] == 0
+    assert "验证页" in record["message"]
+    assert record["message"] == str(outcome.error)      # exactly what the chat was told
+    assert record["code"] == entries._ERROR_CODES["blocked"]
+    assert record["attempted"] == []                    # the chain never reported back
+    assert QUERY not in json.dumps(record, ensure_ascii=False)
+
+
+def test_empty_answers_keep_the_backends_that_were_walked(monkeypatch) -> None:
+    monkeypatch.setattr(net, "system_proxy_present", lambda: False)
+    plugin = make_plugin({"backend_chain": ["bing", "exa"]})
+    _stub_chain(plugin, monkeypatch, {
+        "results": [{"title": "T", "url": "not-a-url", "snippet": "s"}],
+        "backend": "exa", "attempted": ["bing", "exa"],
+    })
+    outcome = asyncio.run(plugin.search(query=QUERY))
+    assert outcome.is_err() and outcome.error.code == "BETTER_WEB_SEARCH_EMPTY"
+
+    record = plugin._last_search
+    assert record["ok"] is False
+    assert record["attempted"] == ["bing", "exa"]       # "why nothing?" needs this line
+    assert "没有搜索到结果" in record["message"]
+
+
+def test_a_too_short_query_does_not_overwrite_the_last_real_search(monkeypatch) -> None:
+    monkeypatch.setattr(net, "system_proxy_present", lambda: False)
+    plugin = make_plugin({"backend_chain": ["exa"]})
+    _stub_chain(plugin, monkeypatch, {
+        "results": exa_results(), "backend": "exa", "attempted": ["exa"],
+    })
+    asyncio.run(plugin.search(query=QUERY))
+    before = dict(plugin._last_search)
+    assert asyncio.run(plugin.search(query="喵")).is_err()
+    assert plugin._last_search == before
+
 
 
 def test_panel_context_entry_returns_plain_dict_and_survives_host_failure(monkeypatch) -> None:

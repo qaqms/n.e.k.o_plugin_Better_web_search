@@ -111,6 +111,26 @@ def test_host_switch_states_intent_not_status() -> None:
     assert "is running" not in _load_locale("en")["panel.host.label"]
 
 
+def test_last_search_card_shows_a_record_not_a_guess() -> None:
+    """The card may only render what the plugin actually kept.
+
+    The host never logs tool payloads, so this is the single place a user can see
+    which backend answered a search. Presence is keyed on the stamped clock rather
+    than on ``count``, or a plugin that has never searched would render "0 条 / -"
+    as if a search had just failed.
+    """
+    root = Path(__file__).resolve().parents[1]
+    tsx = (root / "ui" / "panel.tsx").read_text(encoding="utf-8")
+    body = tsx.split("function renderLastSearchCard", 1)[1].split("\n  function ", 1)[0]
+    assert 'const hasLastSearch = asString(lastSearch.at, "") !== ""' in tsx
+    assert "hasLastSearch ?" in body and "!hasLastSearch ?" in body
+    for key in ("panel.last.title", "panel.last.none", "panel.last.backendLabel",
+                "panel.last.countLabel", "panel.last.msLabel", "panel.last.attempted",
+                "panel.last.fellBack", "panel.last.error"):
+        assert key in body, f"card lost {key}"
+    assert "last_search" in tsx.split("type PanelState", 1)[1].split("}", 1)[0]
+
+
 def test_plugin_manifest_exists() -> None:
     root = Path(__file__).resolve().parents[1]
     manifest = root / "plugin.toml"

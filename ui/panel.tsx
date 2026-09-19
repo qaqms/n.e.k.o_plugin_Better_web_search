@@ -37,6 +37,19 @@ type HostSearchState = {
   toggleable?: boolean
 }
 
+type LastSearchState = {
+  ok?: boolean
+  backend?: string
+  count?: number
+  requested?: number
+  attempted?: string[]
+  query_len?: number
+  ms?: number
+  at?: string
+  message?: string
+  code?: string
+}
+
 type PanelState = {
   onboarding_stage?: string
   exa_key_masked?: string
@@ -52,6 +65,7 @@ type PanelState = {
   takeover_error?: string
   ssrf_fake_ip?: boolean
   quota_note?: string
+  last_search?: LastSearchState
 }
 
 type DiagnoseView = {
@@ -99,6 +113,11 @@ function asBool(value: unknown, fallback: boolean): boolean {
   if (value === "true") return true
   if (value === "false") return false
   return fallback
+}
+
+function asNumber(value: unknown): number {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : 0
 }
 
 function resultMessage(result: ActionRecord): string {
@@ -212,6 +231,11 @@ export default function BetterWebSearchPanel(props: PluginSurfaceProps<PanelStat
   const ssrfFakeIpKnown = typeof safeState.ssrf_fake_ip === "boolean"
   const ssrfFakeIp = asBool(safeState.ssrf_fake_ip, false)
   const proxyMode = asString(safeState.proxy_mode, "-")
+  const lastSearch: LastSearchState =
+    safeState.last_search && typeof safeState.last_search === "object" ? safeState.last_search : {}
+  // ``at`` is stamped when the search happens, so an absent one means the plugin
+  // has not answered a search since it started -- not "the search was empty".
+  const hasLastSearch = asString(lastSearch.at, "") !== ""
 
   function hasAction(id: string): boolean {
     return actionList.some((action) => action.id === id || action.entry_id === id)
@@ -583,6 +607,50 @@ export default function BetterWebSearchPanel(props: PluginSurfaceProps<PanelStat
     )
   }
 
+  function renderLastSearchCard() {
+    const ok = asBool(lastSearch.ok, false)
+    const backend = asString(lastSearch.backend, "-")
+    const attempted = asList(lastSearch.attempted)
+    const message = asString(lastSearch.message, "")
+    const fellBack = attempted.length > 1
+    const count = Number(lastSearch.count)
+    const countText = Number.isFinite(count) ? String(count) : "-"
+    return (
+      <Card title={t("panel.last.title")}>
+        <Stack>
+          {!hasLastSearch ? <Text>{t("panel.last.none")}</Text> : null}
+          {hasLastSearch ? (
+            <Grid cols={3}>
+              <StatCard label={t("panel.last.backendLabel")} value={backend} />
+              <StatCard label={t("panel.last.countLabel")} value={countText} />
+              <StatCard label={t("panel.last.msLabel")} value={latencyText(lastSearch.ms) || "-"} />
+            </Grid>
+          ) : null}
+          {hasLastSearch ? (
+            <Inline gap={2} wrap align="center">
+              <StatusBadge tone={ok ? "success" : "danger"} label={ok ? t("panel.last.ok") : t("panel.last.fail")} />
+              <Text>{t("panel.last.meta", {
+                at: asString(lastSearch.at, "-"),
+                chars: asNumber(lastSearch.query_len),
+                requested: asNumber(lastSearch.requested),
+              })}</Text>
+            </Inline>
+          ) : null}
+          {hasLastSearch && fellBack ? (
+            <Text>{t("panel.last.attempted", { chain: attempted.join(" → ") })}</Text>
+          ) : null}
+          {hasLastSearch && fellBack ? (
+            <Tip>{t("panel.last.fellBack", { first: attempted[0], backend })}</Tip>
+          ) : null}
+          {hasLastSearch && !ok && message ? (
+            <Text>{t("panel.last.error", { detail: message })}</Text>
+          ) : null}
+          {hasLastSearch ? <Tip>{t("panel.last.help")}</Tip> : null}
+        </Stack>
+      </Card>
+    )
+  }
+
   function renderChainCard() {
     return (
       <Card title={t("panel.chain.title")}>
@@ -724,6 +792,7 @@ export default function BetterWebSearchPanel(props: PluginSurfaceProps<PanelStat
             stage was persisted would otherwise keep being told "you are on the free
             tier, go configure a key" while a working key sits right there. */}
         {stage === "trial" && !maskedKey ? renderTrialCard() : renderKeyCard()}
+        {renderLastSearchCard()}
         {renderChainCard()}
         {renderHostCard()}
         {renderDiagnoseCard()}

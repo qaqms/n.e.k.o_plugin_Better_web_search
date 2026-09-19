@@ -1,6 +1,6 @@
 {
   "plugin.name": "Better Web Search",
-  "plugin.description": "Keyless web search and page reading. Works out of the box and falls back across several free backends. Ships a setup panel (optional one-paste Exa free API key), a two-way switch for the host's built-in search, a proxy-software compatibility toggle, and a network self-check; also supports proxies and your own SearXNG.",
+  "plugin.description": "Keyless web search and page reading. Works out of the box and falls back across several free backends. Ships a setup panel (optional one-paste Exa free API key), a two-way switch for the host's built-in search, a proxy-software compatibility toggle, a network self-check, and a card showing which backend answered your last search; also supports proxies and your own SearXNG.",
 
   "panel.title": "Better Web Search",
   "panel.subtitle": "First time here? Register at Exa for a free key, or tap \"Try the free way\" and start searching right away.",
@@ -83,6 +83,19 @@
   "panel.chain.empty": "No usable search source yet. Wait for the plugin to finish starting, then tap \"Refresh panel\".",
   "panel.chain.duckHidden": "duckduckgo is not in the list right now: it only gets added when a proxy is detected, because direct connections in mainland China mostly get nothing from it.",
   "panel.chain.duckShown": "A proxy was detected, so duckduckgo was added as a spare source.",
+
+  "panel.last.title": "Latest search",
+  "panel.last.none": "Nothing recorded yet. Ask the cat-girl to search for something, then tap [Refresh panel] to see which source answered and how long it took.",
+  "panel.last.ok": "Got results",
+  "panel.last.fail": "No results",
+  "panel.last.backendLabel": "Answered by",
+  "panel.last.countLabel": "Results",
+  "panel.last.msLabel": "Time",
+  "panel.last.attempted": "Tried in order: {chain}",
+  "panel.last.fellBack": "\"{first}\" was tried first and did not answer, so it fell back to \"{backend}\". That is the chain working as designed, not an error.",
+  "panel.last.meta": "At {at} · query {chars} characters · asked for {requested} results",
+  "panel.last.error": "Last reply: {detail}",
+  "panel.last.help": "Only the latest search is kept and a plugin restart clears it. The panel stores the query length, never the query itself.",
 
   "panel.host.title": "Built-in \"web search\" plugin",
   "panel.host.label": "Stop the built-in \"web search\" (this plugin takes over)",

@@ -38,12 +38,12 @@
 
 对猫娘直接说"搜一下 XXX"就会走 `search`；想知道某条结果的具体内容时说"打开这个链接看看"就会走 `fetch`。两个入口都注册给了对话侧：
 
-- **`search`** — 免 Key 搜索。参数 `query` / `max_results` / `backend`。返回 `summary`（含标题、摘要、链接）。
+- **`search`** — 免 Key 搜索。参数 `query` / `max_results` / `backend`。返回 `summary`（含标题、摘要、链接），外加 `backend` 与 `attempted`（这一次实际走过哪几路）。
 - **`fetch`** — 读取网页正文。参数 `url` / `max_chars` / `mode`。先本地直连抓正文（**URL 不会经过任何第三方**），失败再走远端阅读器。
 
 `fetch` 带 SSRF 防护：`localhost`、`127.0.0.1`、`192.168.x.x`、`169.254.169.254`（云元数据地址）、`*.local`、以及解析到内网的域名、`javascript:` / `ftp:` 之类协议，全部拒绝。唯一例外是 `[net] ssrf_allow_ranges`（默认 `198.18.0.0/15`）：兼容 TUN + fake-ip 代理把外网域名解析成假 IP 的情况，且**只对域名解析结果放行**——直接把 IP 填进链接照样拒绝。
 
-面板里还有：接入教程（注册 → 粘贴 → 立即测试三步 + 「先体验」按钮）、「停用宿主内置网络搜索」双向开关（避免两个搜索插件抢活）、**「代理软件兼容」开关**（Clash/mihomo 的 TUN + fake-ip 模式下面板一键切，不需要你懂 CIDR）、网络自检（默认跟随检测到的代理决定是否**直连/代理双测**，也可手动固定；双测会把探测次数翻倍，结果表格里"走代理能不能用"单独一列，未测不等于用不了）。
+面板里还有：**「最近一次搜索」回看卡**（哪一路答的、几条、多久、依次试过哪几路——这些原本只在插件日志里，宿主不记插件的工具返回体，所以面板是唯一能看到的地方；只记关键词字数，不记内容，重启插件即清空）、接入教程（注册 → 粘贴 → 立即测试三步 + 「先体验」按钮）、「停用宿主内置网络搜索」双向开关（避免两个搜索插件抢活）、**「代理软件兼容」开关**（Clash/mihomo 的 TUN + fake-ip 模式下面板一键切，不需要你懂 CIDR）、网络自检（默认跟随检测到的代理决定是否**直连/代理双测**，也可手动固定；双测会把探测次数翻倍，结果表格里"走代理能不能用"单独一列，未测不等于用不了）。
 
 > **接管范围的诚实说明**：面板那个开关只接管**对话侧的搜索工具**这一路。宿主自己还有几条不走 LLM 工具的路径
 > （窗口上下文 `search_duckduckgo` / `search_baidu`、话题素材采集等）经 `utils/web_scraper/search_gateway.py`
@@ -176,7 +176,7 @@ uv run --project "../../N.E.K.O" python -m pytest -c tests/pytest.ini tests -q
 结构：
 
 ```text
-__init__.py      插件主体：四段配置、后端编排与代理感知裁剪、回退、对话入口、面板 entry、首启引导
+__init__.py      插件主体：四段配置、后端编排与代理感知裁剪、回退、对话入口、最近一次搜索记录、面板 entry、首启引导
 _providers.py    exa / anysearch / bing / baidu / duckduckgo / searxng + 正文抓取（exa 支持密钥）
 _parsing.py      零依赖 HTML 解析（结果卡片打分 + 正文线性化 + GBK 容错解码）
 _net.py          标准库 HTTP + 代理策略
@@ -184,7 +184,7 @@ _resilience.py   缓存、并发合并、限流、失败退避（含 ApiKeyRejec
 _guard.py        fetch 的 SSRF 防护（allow_ranges 只对域名解析结果生效）
 _host.py         宿主内置 web_search 的状态读取与双向开关（只走宿主公开回环 API）
 _diagnose.py     网络自检编排（纯逻辑，probe 闭包由 __init__.py 注入）
-ui/panel.tsx     面板（引导三步 / 密钥管理 / 内置搜索开关 / 自检按钮）
+ui/panel.tsx     面板（引导三步 / 密钥管理 / 最近一次搜索回看 / 内置搜索开关 / 自检按钮）
 docs/quickstart.md  接入教程
 tests/           离线用例 + 真实响应夹具（**不进分发包**，见 pyproject 的 [tool.neko.build]）
 docs/plan-*.md   施工单，内部文档（**不进分发包**）
